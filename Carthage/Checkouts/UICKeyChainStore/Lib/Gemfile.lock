@@ -4,7 +4,7 @@ GEM
     rake (12.1.0)
     rouge (2.0.7)
     xcjobs (0.10.0)
-    xcpretty (0.2.8)
+    xcpretty (0.3.0)
       rouge (~> 2.0.7)
 
 PLATFORMS
