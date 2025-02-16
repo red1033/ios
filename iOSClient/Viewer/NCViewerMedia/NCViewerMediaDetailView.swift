@@ -23,199 +23,232 @@
 
 import UIKit
 import MapKit
-import NCCommunication
+import NextcloudKit
+import Alamofire
 
-public protocol NCViewerMediaDetailViewDelegate {
+public protocol NCViewerMediaDetailViewDelegate: AnyObject {
     func downloadFullResolution()
 }
 
 class NCViewerMediaDetailView: UIView {
-    
-    @IBOutlet weak var separator: UIView!
-    @IBOutlet weak var sizeLabel: UILabel!
-    @IBOutlet weak var sizeValue: UILabel!
-    @IBOutlet weak var dateLabel: UILabel!
-    @IBOutlet weak var dateValue: UILabel!
-    @IBOutlet weak var dimLabel: UILabel!
-    @IBOutlet weak var dimValue: UILabel!
-    @IBOutlet weak var lensModelLabel: UILabel!
-    @IBOutlet weak var lensModelValue: UILabel!
-    @IBOutlet weak var messageButton: UIButton!
     @IBOutlet weak var mapContainer: UIView!
-    @IBOutlet weak var locationButton: UIButton!
-    
-    var latitude: Double = 0
-    var longitude: Double = 0
-    var location: String?
-    var date: Date?
-    var lensModel: String?
-    var metadata: tableMetadata?
-    var mapView: MKMapView?
-    var delegate: NCViewerMediaDetailViewDelegate?
-        
-    override func awakeFromNib() {
-        super.awakeFromNib()
-           
-        separator.backgroundColor = NCBrandColor.shared.separator
-        sizeLabel.text = ""
-        sizeValue.text = ""
-        dateLabel.text = ""
-        dateValue.text = ""
-        dimLabel.text = ""
-        dimValue.text = ""
-        lensModelLabel.text = ""
-        lensModelValue.text = ""
-        messageButton.setTitle("" , for: .normal)
-        locationButton.setTitle("" , for: .normal)
+    @IBOutlet weak var outerMapContainer: UIView!
+    @IBOutlet weak var dayLabel: UILabel!
+    @IBOutlet weak var dateLabel: UILabel!
+    @IBOutlet weak var noDateLabel: UILabel!
+    @IBOutlet weak var timeLabel: UILabel!
+    @IBOutlet weak var nameLabel: UILabel!
+    @IBOutlet weak var modelLabel: UILabel!
+    @IBOutlet weak var deviceContainer: UIView!
+    @IBOutlet weak var outerContainer: UIView!
+    @IBOutlet weak var lensLabel: UILabel!
+    @IBOutlet weak var megaPixelLabel: UILabel!
+    @IBOutlet weak var megaPixelLabelDivider: UILabel!
+    @IBOutlet weak var resolutionLabel: UILabel!
+    @IBOutlet weak var resolutionLabelDivider: UILabel!
+    @IBOutlet weak var sizeLabel: UILabel!
+    @IBOutlet weak var extensionLabel: UILabel!
+    @IBOutlet weak var livePhotoImageView: UIImageView!
+    @IBOutlet weak var isoLabel: UILabel!
+    @IBOutlet weak var lensSizeLabel: UILabel!
+    @IBOutlet weak var exposureValueLabel: UILabel!
+    @IBOutlet weak var apertureLabel: UILabel!
+    @IBOutlet weak var shutterSpeedLabel: UILabel!
+    @IBOutlet weak var locationLabel: UILabel!
+    @IBOutlet weak var downloadImageButton: UIButton!
+    @IBOutlet weak var downloadImageLabel: UILabel!
+    @IBOutlet weak var downloadImageButtonContainer: UIStackView!
+    @IBOutlet weak var dateContainer: UIView!
+    @IBOutlet weak var lensInfoStackViewLeadingConstraint: NSLayoutConstraint!
+    @IBOutlet weak var lensInfoStackViewTrailingConstraint: NSLayoutConstraint!
+    @IBOutlet weak var lensInfoLeadingFakePadding: UILabel!
+    @IBOutlet weak var lensInfoTrailingFakePadding: UILabel!
+
+    private var metadata: tableMetadata?
+    private var mapView: MKMapView?
+    private var ncplayer: NCPlayer?
+    weak var delegate: NCViewerMediaDetailViewDelegate?
+    let utilityFileSystem = NCUtilityFileSystem()
+
+    private var exif: ExifData?
+
+    var isShown: Bool {
+        return !self.isHidden
     }
-    
+
     deinit {
         print("deinit NCViewerMediaDetailView")
-        
+
         self.mapView?.removeFromSuperview()
         self.mapView = nil
     }
-    
-    func show(metadata: tableMetadata, image: UIImage?, textColor: UIColor?, latitude: Double, longitude: Double, location: String?, date: Date?, lensModel: String?, delegate: NCViewerMediaDetailViewDelegate?) {
-                        
+
+    func show(metadata: tableMetadata,
+              image: UIImage?,
+              textColor: UIColor?,
+              exif: ExifData,
+              ncplayer: NCPlayer?,
+              delegate: NCViewerMediaDetailViewDelegate?) {
+
         self.metadata = metadata
-        self.latitude = latitude
-        self.longitude = longitude
-        self.location = location
-        self.date = date
-        self.lensModel = lensModel
+        self.exif = exif
+        self.ncplayer = ncplayer
         self.delegate = delegate
-        
-        if mapView == nil && (latitude != -1 && latitude != 0 && longitude != -1 && longitude != 0) {
-            
+
+        outerMapContainer.isHidden = true
+        downloadImageButtonContainer.isHidden = true
+
+        if let latitude = exif.latitude, let longitude = exif.longitude, NCNetworking.shared.isOnline {
+            // We hide the map view on phones in landscape (aka compact height), since there is too little space to fit all of it.
+            mapContainer.isHidden = traitCollection.verticalSizeClass == .compact
+
+            outerMapContainer.isHidden = false
             let annotation = MKPointAnnotation()
             annotation.coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-            
-            self.mapView = MKMapView.init()
-            if let mapView = self.mapView {
-                mapView.translatesAutoresizingMaskIntoConstraints = false
+            let region = MKCoordinateRegion(center: annotation.coordinate, latitudinalMeters: 500, longitudinalMeters: 500)
+
+            if mapView == nil, mapView?.region.center.latitude != latitude, mapView?.region.center.longitude != longitude {
+                let mapView = MKMapView()
+                self.mapView = mapView
+                mapContainer.subviews.forEach { $0.removeFromSuperview() }
                 self.mapContainer.addSubview(mapView)
-                
+                mapView.translatesAutoresizingMaskIntoConstraints = false
                 NSLayoutConstraint.activate([
                     mapView.topAnchor.constraint(equalTo: self.mapContainer.topAnchor),
                     mapView.bottomAnchor.constraint(equalTo: self.mapContainer.bottomAnchor),
                     mapView.leadingAnchor.constraint(equalTo: self.mapContainer.leadingAnchor),
-                    mapView.trailingAnchor.constraint(equalTo: self.mapContainer.trailingAnchor),
+                    mapView.trailingAnchor.constraint(equalTo: self.mapContainer.trailingAnchor)
                 ])
-                
-                mapView.layer.cornerRadius = 6
+
                 mapView.isZoomEnabled = true
                 mapView.isScrollEnabled = false
                 mapView.isUserInteractionEnabled = false
                 mapView.addAnnotation(annotation)
-                mapView.setRegion(MKCoordinateRegion(center: annotation.coordinate, latitudinalMeters: 500, longitudinalMeters: 500), animated: false)
-            }
-        }
-        
-        // Size
-        sizeLabel.text = NSLocalizedString("_size_", comment: "")
-        sizeValue.text = CCUtility.transformedSize(metadata.size)
-        sizeValue.textColor = textColor
-        
-        // Date
-        if let date = date {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .full
-            formatter.timeStyle = .medium
-            let dateString = formatter.string(from: date as Date)
-            
-            dateLabel.text = NSLocalizedString("_date_", comment: "")
-            dateValue.text = dateString
-        } else {
-            dateLabel.text = NSLocalizedString("_date_", comment: "")
-            dateValue.text = NSLocalizedString("_not_available_", comment: "")
-        }
-        dateValue.textColor = textColor
-        
-        // Dimension / Duration
-        if metadata.classFile == NCCommunicationCommon.typeClassFile.image.rawValue {
-            if let image = image {
-                dimLabel.text = NSLocalizedString("_resolution_", comment: "")
-                dimValue.text = "\(Int(image.size.width)) x \(Int(image.size.height))"
-            }
-        } else if metadata.classFile == NCCommunicationCommon.typeClassFile.video.rawValue || metadata.classFile == NCCommunicationCommon.typeClassFile.audio.rawValue  {
-            if let durationTime = NCManageDatabase.shared.getVideoDurationTime(metadata: metadata) {
-                self.dimLabel.text = NSLocalizedString("_duration_", comment: "")
-                self.dimValue.text = NCUtility.shared.stringFromTime(durationTime)
-            }
-        }
-        dimValue.textColor = textColor
 
-        // Model
-        if let lensModel = lensModel {
-            lensModelLabel.text = NSLocalizedString("_model_", comment: "")
-            lensModelValue.text = lensModel
-            lensModelValue.textColor = textColor
+                mapView.setRegion(region, animated: false)
+            }
         }
-        
-        // Message
-        if metadata.classFile == NCCommunicationCommon.typeClassFile.image.rawValue && !CCUtility.fileProviderStorageExists(metadata.ocId, fileNameView: metadata.fileNameView) && metadata.session == "" {
-            messageButton.setTitle(NSLocalizedString("_try_download_full_resolution_", comment: ""), for: .normal)
-            messageButton.isHidden = false
+
+        if let make = exif.make, let model = exif.model, let lensModel = exif.lensModel {
+            modelLabel.text = "\(make) \(model)"
+            lensLabel.text = lensModel
+                .replacingOccurrences(of: make, with: "")
+                .replacingOccurrences(of: model, with: "")
+                .replacingOccurrences(of: "f/", with: "ƒ").trimmingCharacters(in: .whitespacesAndNewlines).firstUppercased
         } else {
-            messageButton.setTitle("" , for: .normal)
-            messageButton.isHidden = true
+            modelLabel.text = NSLocalizedString("_no_camera_information_", comment: "")
+            lensLabel.text = NSLocalizedString("_no_lens_information_", comment: "")
         }
-        
-        // Location
-        if let location = location {
-            locationButton.setTitle(location, for: .normal)
-            locationButton.isHidden = false
+
+        nameLabel.text = (metadata.fileNameView as NSString).deletingPathExtension
+        sizeLabel.text = utilityFileSystem.transformedSize(metadata.size)
+
+        if let shutterSpeedApex = exif.shutterSpeedApex {
+            prepareLensInfoViewsForData()
+            shutterSpeedLabel.text = "1/\(Int(pow(2, shutterSpeedApex))) s"
+        }
+
+        if let iso = exif.iso {
+            prepareLensInfoViewsForData()
+            isoLabel.text = "ISO \(iso)"
+        }
+
+        if let apertureValue = exif.apertureValue {
+            apertureLabel.text = "ƒ\(apertureValue)"
+        }
+
+        if let exposureValue = exif.exposureValue {
+            exposureValueLabel.text = "\(exposureValue) ev"
+        }
+
+        if let lensLength = exif.lensLength {
+            lensSizeLabel.text = "\(lensLength) mm"
+        }
+
+        if let date = exif.date {
+            dateContainer.isHidden = false
+            noDateLabel.isHidden = true
+
+            let formatter = DateFormatter()
+
+            formatter.dateFormat = "EEEE"
+            let dayString = formatter.string(from: date as Date)
+            dayLabel.text = dayString
+
+            formatter.dateFormat = "d MMM yyyy"
+            let dateString = formatter.string(from: date as Date)
+            dateLabel.text = dateString
+
+            formatter.dateFormat = "HH:mm"
+            let timeString = formatter.string(from: date as Date)
+            timeLabel.text = timeString
         } else {
-            locationButton.setTitle("" , for: .normal)
-            locationButton.isHidden = true
+            noDateLabel.text = NSLocalizedString("_no_date_information_", comment: "")
         }
-        
+
+        if let height = exif.height, let width = exif.width {
+            megaPixelLabel.isHidden = false
+            megaPixelLabelDivider.isHidden = false
+            resolutionLabel.isHidden = false
+            resolutionLabelDivider.isHidden = false
+
+            resolutionLabel.text = "\(width) x \(height)"
+
+            let megaPixels: Double = Double(width * height) / 1000000
+            megaPixelLabel.text = megaPixels < 1 ? String(format: "%.1f MP", megaPixels) : "\(Int(megaPixels)) MP"
+        }
+
+        extensionLabel.text = metadata.fileExtension.uppercased()
+
+        if exif.location?.isEmpty == false {
+            locationLabel.text = exif.location
+        }
+
+        if metadata.isLivePhoto {
+            livePhotoImageView.isHidden = false
+        }
+
+        if metadata.isImage && !utilityFileSystem.fileProviderStorageExists(metadata) && metadata.session.isEmpty {
+            downloadImageButton.setTitle(NSLocalizedString("_try_download_full_resolution_", comment: ""), for: .normal)
+            downloadImageLabel.text = NSLocalizedString("_full_resolution_image_info_", comment: "")
+            downloadImageButtonContainer.isHidden = false
+        }
+
         self.isHidden = false
+        layoutIfNeeded()
     }
-    
+
     func hide() {
         self.isHidden = true
     }
-    
-    func isShow() -> Bool {
-        return !self.isHidden
+
+    private func prepareLensInfoViewsForData() {
+        lensInfoLeadingFakePadding.isHidden = true
+        lensInfoTrailingFakePadding.isHidden = true
+        lensInfoStackViewLeadingConstraint.constant = 5
+        lensInfoStackViewTrailingConstraint.constant = 5
     }
-    
-    //MARK: - Action
+
+    // MARK: - Action
 
     @IBAction func touchLocation(_ sender: Any) {
-        
-        if latitude != -1 && latitude != 0 && longitude != -1 && longitude != 0 {
-            
-            let latitude: CLLocationDegrees = self.latitude
-            let longitude: CLLocationDegrees = self.longitude
+        guard let latitude = exif?.latitude, let longitude = exif?.longitude else { return }
 
-            let regionDistance:CLLocationDistance = 10000
-            let coordinates = CLLocationCoordinate2DMake(latitude, longitude)
-            let regionSpan = MKCoordinateRegion(center: coordinates, latitudinalMeters: regionDistance, longitudinalMeters: regionDistance)
-            let options = [
-                MKLaunchOptionsMapCenterKey: NSValue(mkCoordinate: regionSpan.center),
-                MKLaunchOptionsMapSpanKey: NSValue(mkCoordinateSpan: regionSpan.span)
-            ]
-            let placemark = MKPlacemark(coordinate: coordinates, addressDictionary: nil)
-            let mapItem = MKMapItem(placemark: placemark)
+        let latitudeDeg: CLLocationDegrees = latitude
+        let longitudeDeg: CLLocationDegrees = longitude
+
+        let coordinates = CLLocationCoordinate2DMake(latitudeDeg, longitudeDeg)
+        let placemark = MKPlacemark(coordinate: coordinates, addressDictionary: nil)
+        let mapItem = MKMapItem(placemark: placemark)
+
+        if let location = exif?.location {
             mapItem.name = location
-            mapItem.openInMaps(launchOptions: options)
         }
+
+        mapItem.openInMaps()
     }
-    
-    @IBAction func touchFavorite(_ sender: Any) {
-        
-    }
-    
-    @IBAction func touchMessage(_ sender: Any) {
-        
+
+    @IBAction func touchDownload(_ sender: Any) {
         delegate?.downloadFullResolution()
-    }
-    
-    //MARK: -
-    func secondsToHoursMinutesSeconds (seconds : Int) -> (Int, Int, Int) {
-      return (seconds / 3600, (seconds % 3600) / 60, (seconds % 3600) % 60)
     }
 }

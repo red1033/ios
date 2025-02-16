@@ -22,98 +22,68 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 
-class NCFavorite: NCCollectionViewCommon  {
-    
-    // MARK: - View Life Cycle
+class NCFavorite: NCCollectionViewCommon {
 
     required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
-        
+
         titleCurrentFolder = NSLocalizedString("_favorites_", comment: "")
         layoutKey = NCGlobal.shared.layoutViewFavorite
-        enableSearchBar = true
-        emptyImage = UIImage.init(named: "star.fill")?.image(color: NCBrandColor.shared.yellowFavorite, size: UIScreen.main.bounds.width)
+        enableSearchBar = false
+        headerRichWorkspaceDisable = true
+        emptyImageName = "star.fill"
+        emptyImageColors = [NCBrandColor.shared.yellowFavorite]
         emptyTitle = "_favorite_no_files_"
         emptyDescription = "_tutorial_favorite_view_"
     }
-    
-    // MARK: - DataSource + NC Endpoint
-    
+
+    // MARK: - View Life Cycle
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+
+        reloadDataSource()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+
+        getServerData()
+    }
+
+    // MARK: - DataSource
+
     override func reloadDataSource() {
+        var predicate = self.defaultPredicate
+        let directoryOnTop = NCKeychain().getDirectoryOnTop(account: session.account)
+
+        if self.serverUrl.isEmpty {
+           predicate = NSPredicate(format: "account == %@ AND favorite == true AND NOT (status IN %@)", session.account, global.metadataStatusHideInView)
+        }
+
+        let metadatas = self.database.getResultsMetadatasPredicate(predicate, layoutForView: layoutForView, directoryOnTop: directoryOnTop)
+
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView, directoryOnTop: directoryOnTop)
+
         super.reloadDataSource()
-        
-        DispatchQueue.global().async {
-            
-            if !self.isSearching {
-           
-                if self.serverUrl == "" {
-                    self.metadatasSource = NCManageDatabase.shared.getMetadatas(predicate: NSPredicate(format: "account == %@ AND favorite == true", self.appDelegate.account))
-                } else {
-                    self.metadatasSource = NCManageDatabase.shared.getMetadatas(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", self.appDelegate.account, self.serverUrl))
-                }
-            }
-            
-            self.dataSource = NCDataSource.init(metadatasSource: self.metadatasSource, sort:self.layoutForView?.sort, ascending: self.layoutForView?.ascending, directoryOnTop: self.layoutForView?.directoryOnTop, favoriteOnTop: true, filterLivePhoto: true)
-            
-            DispatchQueue.main.async {
-                self.refreshControl.endRefreshing()
+    }
+
+    override func getServerData() {
+        NextcloudKit.shared.listingFavorites(showHiddenFiles: NCKeychain().showHiddenFiles, account: session.account) { task in
+            self.dataSourceTask = task
+            if self.dataSource.isEmpty() {
                 self.collectionView.reloadData()
             }
-        }
-    }
-    
-    override func reloadDataSourceNetwork(forced: Bool = false) {
-        super.reloadDataSourceNetwork(forced: forced)
-        
-        if isSearching {
-            networkSearch()
-            return
-        }
-        
-        isReloadDataSourceNetworkInProgress = true
-        collectionView?.reloadData()
-        
-        if serverUrl == "" {
-            
-            NCNetworking.shared.listingFavoritescompletion(selector: NCGlobal.shared.selectorListingFavorite) { (account, metadatas, errorCode, errorDescription) in
-                if errorCode != 0 {
-                    NCContentPresenter.shared.messageNotification("_error_", description: errorDescription, delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: errorCode)
-                }
-                
-                DispatchQueue.main.async {
-                    self.refreshControl.endRefreshing()
-                    self.isReloadDataSourceNetworkInProgress = false
+        } completion: { account, files, _, error in
+            if error == .success, let files {
+                self.database.convertFilesToMetadatas(files, useFirstAsMetadataFolder: false) { _, metadatas in
+                    self.database.updateMetadatasFavorite(account: account, metadatas: metadatas)
                     self.reloadDataSource()
                 }
             }
-            
-        } else {
-            
-            networkReadFolder(forced: forced) { (tableDirectory, metadatas, metadatasUpdate, metadatasDelete, errorCode, errorDescription) in
-                if errorCode == 0 {
-                    for metadata in metadatas ?? [] {
-                        if !metadata.directory {
-                            if NCManageDatabase.shared.isDownloadMetadata(metadata, download: false) {
-                                NCOperationQueue.shared.download(metadata: metadata, selector: NCGlobal.shared.selectorDownloadFile)
-                            }
-                        }
-                    }
-                }
-                
-                DispatchQueue.main.async {
-                    self.refreshControl.endRefreshing()
-                    self.isReloadDataSourceNetworkInProgress = false
-                    self.richWorkspaceText = tableDirectory?.richWorkspace
-                    if metadatasUpdate?.count ?? 0 > 0 || metadatasDelete?.count ?? 0 > 0 || forced {
-                        self.reloadDataSource()
-                    } else {
-                        self.collectionView?.reloadData()
-                    }
-                }
-            }
+            self.refreshControl.endRefreshing()
         }
     }
 }
-

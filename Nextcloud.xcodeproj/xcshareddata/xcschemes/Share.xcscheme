@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1250"
+   LastUpgradeVersion = "1540"
    wasCreatedForAppExtension = "YES"
    version = "2.0">
    <BuildAction
@@ -52,6 +52,60 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "AF8ED1F82757821000B8DBC4"
+               BuildableName = "NextcloudUnitTests.xctest"
+               BlueprintName = "NextcloudUnitTests"
+               ReferencedContainer = "container:Nextcloud.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C0046CD92A17B98400D87C9D"
+               BuildableName = "NextcloudUITests.xctest"
+               BlueprintName = "NextcloudUITests"
+               ReferencedContainer = "container:Nextcloud.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C04E2F1F2A17BB4D001BAD85"
+               BuildableName = "NextcloudIntegrationTests.xctest"
+               BlueprintName = "NextcloudIntegrationTests"
+               ReferencedContainer = "container:Nextcloud.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C04E2F2C2A17BB77001BAD85"
+               BuildableName = "NextcloudEndToEndTests.xctest"
+               BlueprintName = "NextcloudEndToEndTests"
+               ReferencedContainer = "container:Nextcloud.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F31F69412A2F6D4500162F76"
+               BuildableName = "NextcloudSnapshotTests.xctest"
+               BlueprintName = "NextcloudSnapshotTests"
+               ReferencedContainer = "container:Nextcloud.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -67,9 +121,9 @@
       allowLocationSimulation = "YES"
       launchAutomaticallySubstyle = "2">
       <RemoteRunnable
-         runnableDebuggingMode = "1"
+         runnableDebuggingMode = "0"
          BundleIdentifier = "it.twsweb.Nextcloud"
-         RemotePath = "/Users/marinofaggiana/Library/Developer/CoreSimulator/Devices/4DBB1715-4E24-4CE7-B67C-CA327B95130C/data/Containers/Bundle/Application/F427D7FF-1632-4BB9-ADEA-A094898BB6C7/Nextcloud.app">
+         RemotePath = "/var/containers/Bundle/Application/92F13FE8-7056-4509-8468-5856675AB1CA/Nextcloud.app">
       </RemoteRunnable>
       <MacroExpansion>
          <BuildableReference
@@ -87,6 +141,7 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES"
+      askForAppToLaunch = "Yes"
       launchAutomaticallySubstyle = "2">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">

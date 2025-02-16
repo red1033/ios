@@ -1,17 +1,18 @@
-# [Nextcloud](https://nextcloud.com)  iOS app [![Releases](https://img.shields.io/github/release/nextcloud/ios.svg)](https://github.com/nextcloud/ios/releases/latest)
-
-[<img src="Animation.gif"
-alt="Download from App Store"
-height="400">](https://itunes.apple.com/us/app/nextcloud/id1125420102?mt=8)
-
+# [Nextcloud](https://nextcloud.com) iOS app 
+[![Releases](https://img.shields.io/github/release/nextcloud/ios.svg)](https://github.com/nextcloud/ios/releases/latest) [![Build](https://github.com/nextcloud/ios/actions/workflows/xcode.yml/badge.svg)](https://github.com/nextcloud/ios/actions/workflows/xcode.yml) [![SwiftLint](https://github.com/nextcloud/ios/actions/workflows/lint.yml/badge.svg)](https://github.com/nextcloud/ios/actions/workflows/lint.yml)
 [![irc](https://img.shields.io/badge/IRC-%23nextcloud--mobile%20on%20freenode-blue.svg)](https://webchat.freenode.net/?channels=nextcloud-mobile)
 
-Check out https://nextcloud.com and follow us on [twitter.com/nextclouders](https://twitter.com/nextclouders) or [twitter.com/NextcloudiOS](https://twitter.com/NextcloudiOS)
+<img src="Animation.gif" alt="Demo of the Nextcloud iOS files app" width="277" height="600"><img src="widget.png" alt="Widget of the Nextcloud iOS files app" width="277" height="600">
+
+[<img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
+alt="Demo of the Nextcloud iOS files app"
+height="40">](https://itunes.apple.com/us/app/nextcloud/id1125420102)
+
+Check out https://nextcloud.com and follow us on [twitter.com/nextclouders](https://twitter.com/nextclouders)
 
 ## How to contribute
 If you want to [contribute](https://nextcloud.com/contribute/) to Nextcloud, you are very welcome:
 
-- on our IRC channels [![irc](https://img.shields.io/badge/IRC-%23nextcloud%20on%20freenode-orange.svg)](https://webchat.freenode.net/?channels=nextcloud) and [![irc](https://img.shields.io/badge/IRC-%23nextcloud--mobile%20on%20freenode-blue.svg)](https://webchat.freenode.net/?channels=nextcloud-mobile) on freenode
 - our forum at https://help.nextcloud.com/c/clients/ios
 - for translations of the app on [Transifex](https://www.transifex.com/nextcloud/nextcloud/dashboard/)
 - opening issues and PRs (including a corresponding issue)
@@ -33,21 +34,13 @@ More information how to contribute: [https://nextcloud.com/contribute/](https://
 ## Start contributing
 
 You can start by forking this repository and creating pull requests on the develop
-branch. Maybe start working on [starter issues](https://github.com/nextcloud/ios/issues?q=is%3Aopen+is%3Aissue+label%3A%22starter+issue%22). 
+branch. Maybe start working on [starter issues](https://github.com/nextcloud/ios/labels/good%20first%20issue). 
 
 Easy starting points are also reviewing [pull requests](https://github.com/nextcloud/ios/pulls)
 
-### Xcode V 13 Project Setup
+### Xcode 16 Project Setup
 
 #### Dependencies
-
-After forking a repository you have to build the dependencies. Dependencies are managed with Carthage version 0.37.0 or later. 
-Run
-
-```
-carthage update --use-xcframeworks --platform iOS --cache-builds
-```
-to fetch and compile the dependencies.
 
 In order to build the project in Xcode you will also need a file `GoogleService-Info.plist` at the root of the repository which contains the Firebase configuration. For development work you can use a mock version found [here](https://github.com/firebase/quickstart-ios/blob/master/mock-GoogleService-Info.plist).
 
@@ -71,10 +64,39 @@ Git even has a `-s | --signoff` command line option to append this to your commi
 
 ## Support
 
-If you need assistance or want to ask a question about the iOS app, you are welcome to [ask for support](https://help.nextcloud.com/c/clients/ios) in our forums or the [IRC-Channel](https://webchat.freenode.net/?channels=nextcloud-mobile). If you have found a bug, feel free to [open a new Issue on GitHub](https://github.com/nextcloud/ios/issues). Keep in mind, that this repository only manages the iOS app. If you find bugs or have problems with the server/backend, you should ask the [Nextcloud server team](https://github.com/nextcloud/server) for help!
+If you need assistance or want to ask a question about the iOS app, you are welcome to [ask for support](https://help.nextcloud.com/c/clients/ios) in our Forums. If you have found a bug, feel free to [open a new Issue on GitHub](https://github.com/nextcloud/ios/issues). Keep in mind, that this repository only manages the iOS app. If you find bugs or have problems with the server/backend, you should ask the [Nextcloud server team](https://github.com/nextcloud/server) for help!
 
 ## TestFlight 
 
 Do you want to try the latest version in development of Nextcloud iOS ? Simple, follow this simple step
 
-[Apple TestFlight](https://testflight.apple.com/join/GjNbfo2a)
+[Apple TestFlight](https://testflight.apple.com/join/RXEJbWj9)
+
+## Testing
+
+#### Note: If a Unit or Integration test exclusively uses and tests NextcloudKit functions and components, then write that test in the NextcloudKit repo. NextcloudKit is used in many other repos as an API, and it's better if such tests are located there.
+
+### Unit tests:
+
+There are currently no preresquites for unit testing that need to be done. Mock everything that's not needed. 
+
+### Integration tests:
+To run integration tests, you need a docker instance of a Nextcloud test server. [This](https://github.com/szaimen/nextcloud-easy-test) is a good start.
+
+1. In `TestConstants.swift` you must specify your instance credentials. App Token is automatically generated.
+
+```
+public class TestConstants {
+    static let timeoutLong: Double = 400
+    static let server = "http://localhost:8080"
+    static let username = "admin"
+    static let password = "admin"
+    static let account = "\(username) \(server)"
+}
+```
+
+2. Run the integration tests. 
+
+### UI tests
+
+UI tests also use the docker server, but besides that there is nothing else you need to do.

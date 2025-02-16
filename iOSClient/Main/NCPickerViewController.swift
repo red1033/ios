@@ -24,158 +24,229 @@
 import UIKit
 import TLPhotoPicker
 import MobileCoreServices
+import Photos
+import NextcloudKit
+import SwiftUI
 
-//MARK: - Photo Picker
+// MARK: - Photo Picker
 
 class NCPhotosPickerViewController: NSObject {
-
-    let appDelegate = UIApplication.shared.delegate as! AppDelegate
-    var sourceViewController: UIViewController
+    var controller: NCMainTabBarController
     var maxSelectedAssets = 1
     var singleSelectedMode = false
 
     @discardableResult
-    init(viewController: UIViewController, maxSelectedAssets: Int, singleSelectedMode: Bool) {
-        sourceViewController = viewController
+    init(controller: NCMainTabBarController, maxSelectedAssets: Int, singleSelectedMode: Bool) {
+        self.controller = controller
         super.init()
-        
+
         self.maxSelectedAssets = maxSelectedAssets
         self.singleSelectedMode = singleSelectedMode
-        
-        self.openPhotosPickerViewController { (assets) in
-            guard let assets = assets else { return }
-            if assets.count > 0 {
-                
-                let form = NCCreateFormUploadAssets.init(serverUrl: self.appDelegate.activeServerUrl, assets: assets, cryptated: false, session: NCNetworking.shared.sessionIdentifierBackground, delegate: nil)
-                let navigationController = UINavigationController.init(rootViewController: form)
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    viewController.present(navigationController, animated: true, completion: nil)
+
+        self.openPhotosPickerViewController { assets in
+            if !assets.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    let model = NCUploadAssetsModel(assets: assets, serverUrl: controller.currentServerUrl(), controller: controller)
+                    let view = NCUploadAssetsView(model: model)
+                    let viewController = UIHostingController(rootView: view)
+                    controller.present(viewController, animated: true, completion: nil)
                 }
             }
         }
     }
-    
-    private func openPhotosPickerViewController(completition: @escaping ([PHAsset]?) -> ()) {
-        
-        var selectedAssets: [PHAsset] = []
+
+    private func openPhotosPickerViewController(completition: @escaping ([TLPHAsset]) -> Void) {
         var configure = TLPhotosPickerConfigure()
-        
+
         configure.cancelTitle = NSLocalizedString("_cancel_", comment: "")
         configure.doneTitle = NSLocalizedString("_done_", comment: "")
         configure.emptyMessage = NSLocalizedString("_no_albums_", comment: "")
         configure.tapHereToChange = NSLocalizedString("_tap_here_to_change_", comment: "")
-        
+
         if maxSelectedAssets > 0 {
             configure.maxSelectedAssets = maxSelectedAssets
         }
-        configure.selectedColor = NCBrandColor.shared.brandElement
+        configure.selectedColor = NCBrandColor.shared.getElement(account: controller.account)
         configure.singleSelectedMode = singleSelectedMode
         configure.allowedAlbumCloudShared = true
-        
-        let viewController = customPhotoPickerViewController(withTLPHAssets: { (assets) in
-            
-            for asset: TLPHAsset in assets {
-                if asset.phAsset != nil {
-                    selectedAssets.append(asset.phAsset!)
-                }
-            }
-            
-            completition(selectedAssets)
-            
+
+        let viewController = customPhotoPickerViewController(withTLPHAssets: { assets in
+            completition(assets)
         }, didCancel: nil)
-        
-        viewController.didExceedMaximumNumberOfSelection = { (picker) in
-            NCContentPresenter.shared.messageNotification("_info_", description: "_limited_dimension_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: NCGlobal.shared.errorInternalError)
+        viewController.didExceedMaximumNumberOfSelection = { _ in
+            let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_limited_dimension_")
+            NCContentPresenter().showError(error: error)
         }
-        
-        viewController.handleNoAlbumPermissions = { (picker) in
-            NCContentPresenter.shared.messageNotification("_info_", description: "_denied_album_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: NCGlobal.shared.errorInternalError)
+        viewController.handleNoAlbumPermissions = { _ in
+            let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_denied_album_")
+            NCContentPresenter().showError(error: error)
         }
-        
-        viewController.handleNoCameraPermissions = { (picker) in
-            NCContentPresenter.shared.messageNotification("_info_", description: "_denied_camera_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: NCGlobal.shared.errorInternalError)
+        viewController.handleNoCameraPermissions = { _ in
+            let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_denied_camera_")
+            NCContentPresenter().showError(error: error)
         }
-        
         viewController.configure = configure
 
-        sourceViewController.present(viewController, animated: true, completion: nil)
+        controller.present(viewController, animated: true, completion: nil)
     }
 }
 
 class customPhotoPickerViewController: TLPhotosPickerViewController {
-    
     override var preferredStatusBarStyle: UIStatusBarStyle {
         return .lightContent
     }
-    
+
     override func makeUI() {
         super.makeUI()
-        
-        self.customNavItem.leftBarButtonItem?.tintColor = .systemBlue
-        self.customNavItem.rightBarButtonItem?.tintColor = .systemBlue
+
+        self.customNavItem.leftBarButtonItem?.tintColor = NCBrandColor.shared.iconImageColor
+        self.customNavItem.rightBarButtonItem?.tintColor = NCBrandColor.shared.iconImageColor
     }
 }
 
-//MARK: - Document Picker
+// MARK: - Document Picker
 
 class NCDocumentPickerViewController: NSObject, UIDocumentPickerDelegate {
+    let appDelegate = (UIApplication.shared.delegate as? AppDelegate)!
+    let utilityFileSystem = NCUtilityFileSystem()
+    let database = NCManageDatabase.shared
+    var isViewerMedia: Bool
+    var viewController: UIViewController?
+    var controller: NCMainTabBarController
 
-    let appDelegate = UIApplication.shared.delegate as! AppDelegate
-    
     @discardableResult
-    init (tabBarController: UITabBarController) {
+    init (controller: NCMainTabBarController, isViewerMedia: Bool, allowsMultipleSelection: Bool, viewController: UIViewController? = nil) {
+        self.controller = controller
+        self.isViewerMedia = isViewerMedia
+        self.viewController = viewController
         super.init()
-          
-        let documentProviderMenu = UIDocumentPickerViewController(documentTypes: ["public.data"], in: .import)
-        
+
+        let documentProviderMenu = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.data])
+
         documentProviderMenu.modalPresentationStyle = .formSheet
-        documentProviderMenu.allowsMultipleSelection = true
-        documentProviderMenu.popoverPresentationController?.sourceView = tabBarController.tabBar
-        documentProviderMenu.popoverPresentationController?.sourceRect = tabBarController.tabBar.bounds
+        documentProviderMenu.allowsMultipleSelection = allowsMultipleSelection
+        documentProviderMenu.popoverPresentationController?.sourceView = controller.tabBar
+        documentProviderMenu.popoverPresentationController?.sourceRect = controller.tabBar.bounds
         documentProviderMenu.delegate = self
-        
-        appDelegate.window?.rootViewController?.present(documentProviderMenu, animated: true, completion: nil)
+
+        controller.present(documentProviderMenu, animated: true, completion: nil)
     }
-    
+
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-    
-        for url in urls {
-            
-            let fileName = url.lastPathComponent
-            let serverUrl = appDelegate.activeServerUrl
+        let session = NCSession.shared.getSession(controller: self.controller)
+        if isViewerMedia,
+           let urlIn = urls.first,
+           let url = self.copySecurityScopedResource(url: urlIn, urlOut: FileManager.default.temporaryDirectory.appendingPathComponent(urlIn.lastPathComponent)),
+           let viewController = self.viewController {
             let ocId = NSUUID().uuidString
-            let atPath = url.path
-            let toPath = CCUtility.getDirectoryProviderStorageOcId(ocId, fileNameView: fileName)!
-            
-            if NCUtilityFileSystem.shared.copyFile(atPath: atPath, toPath: toPath) {
-                
-                let metadataForUpload = NCManageDatabase.shared.createMetadata(account: appDelegate.account, user: appDelegate.user, userId: appDelegate.userId, fileName: fileName, fileNameView: fileName, ocId: ocId, serverUrl: serverUrl, urlBase: appDelegate.urlBase, url: "", contentType: "", livePhoto: false)
-                
-                metadataForUpload.session = NCNetworking.shared.sessionIdentifierBackground
-                metadataForUpload.sessionSelector = NCGlobal.shared.selectorUploadFile
-                metadataForUpload.size = NCUtilityFileSystem.shared.getFileSize(filePath: toPath)
-                metadataForUpload.status = NCGlobal.shared.metadataStatusWaitUpload
-                
-                if NCManageDatabase.shared.getMetadataConflict(account: appDelegate.account, serverUrl: serverUrl, fileName: fileName) != nil {
-                    
-                    if let conflict = UIStoryboard.init(name: "NCCreateFormUploadConflict", bundle: nil).instantiateInitialViewController() as? NCCreateFormUploadConflict {
-                        
-                        conflict.serverUrl = serverUrl
-                        conflict.metadatasUploadInConflict = [metadataForUpload]
-                    
-                        appDelegate.window?.rootViewController?.present(conflict, animated: true, completion: nil)
-                    }
-                
-                } else {
-                    appDelegate.networkingProcessUpload?.createProcessUploads(metadatas: [metadataForUpload])
-                }
-                
+            let fileName = url.lastPathComponent
+            let metadata = database.createMetadata(fileName: fileName,
+                                                   fileNameView: fileName,
+                                                   ocId: ocId,
+                                                   serverUrl: "",
+                                                   url: url.path,
+                                                   contentType: "",
+                                                   session: session,
+                                                   sceneIdentifier: self.controller.sceneIdentifier)
+
+            if metadata.classFile == NKCommon.TypeClassFile.unknow.rawValue {
+                metadata.classFile = NKCommon.TypeClassFile.video.rawValue
+            }
+
+            if let fileNameError = FileNameValidator.shared.checkFileName(metadata.fileNameView, account: self.controller.account) {
+                self.controller.present(UIAlertController.warning(message: "\(fileNameError.errorDescription) \(NSLocalizedString("_please_rename_file_", comment: ""))"), animated: true)
             } else {
-                NCContentPresenter.shared.messageNotification("_error_", description: "_read_file_error_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: NCGlobal.shared.errorInternalError)
+                database.addMetadata(metadata)
+                NCViewer().view(viewController: viewController, metadata: metadata)
+            }
+
+        } else {
+            let serverUrl = self.controller.currentServerUrl()
+            var metadatas = [tableMetadata]()
+            var metadatasInConflict = [tableMetadata]()
+
+            for urlIn in urls {
+                let ocId = NSUUID().uuidString
+                let fileName = urlIn.lastPathComponent
+                let newFileName = FileAutoRenamer.shared.rename(fileName, account: session.account)
+
+                let toPath = utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileNameView: newFileName)
+                let urlOut = URL(fileURLWithPath: toPath)
+
+                guard self.copySecurityScopedResource(url: urlIn, urlOut: urlOut) != nil else { continue }
+
+                let metadataForUpload = database.createMetadata(fileName: newFileName,
+                                                                fileNameView: newFileName,
+                                                                ocId: ocId,
+                                                                serverUrl: serverUrl,
+                                                                url: "",
+                                                                contentType: "",
+                                                                session: session,
+                                                                sceneIdentifier: self.controller.sceneIdentifier)
+
+                metadataForUpload.session = NCNetworking.shared.sessionUploadBackground
+                metadataForUpload.sessionSelector = NCGlobal.shared.selectorUploadFile
+                metadataForUpload.size = utilityFileSystem.getFileSize(filePath: toPath)
+                metadataForUpload.status = NCGlobal.shared.metadataStatusWaitUpload
+                metadataForUpload.sessionDate = Date()
+
+                if database.getMetadataConflict(account: session.account, serverUrl: serverUrl, fileNameView: fileName, nativeFormat: metadataForUpload.nativeFormat) != nil {
+                    metadatasInConflict.append(metadataForUpload)
+                } else {
+                    metadatas.append(metadataForUpload)
+                }
+            }
+
+            var invalidNameIndexes: [Int] = []
+
+            for (index, metadata) in metadatas.enumerated() {
+                if let fileNameError = FileNameValidator.shared.checkFileName(metadata.fileName, account: session.account) {
+                    if metadatas.count == 1 {
+                        let alert = UIAlertController.renameFile(fileName: metadata.fileName, account: session.account) { newFileName in
+                            metadatas[index].fileName = newFileName
+                            metadatas[index].fileNameView = newFileName
+
+                            NCNetworkingProcess.shared.createProcessUploads(metadatas: metadatas)
+                        }
+
+                        self.controller.present(alert, animated: true)
+                        return
+                    } else {
+                        self.controller.present(UIAlertController.warning(message: "\(fileNameError.errorDescription) \(NSLocalizedString("_please_rename_file_", comment: ""))"), animated: true)
+                        invalidNameIndexes.append(index)
+                    }
+                }
+            }
+
+            for index in invalidNameIndexes.reversed() {
+                metadatas.remove(at: index)
+            }
+
+            NCNetworkingProcess.shared.createProcessUploads(metadatas: metadatas)
+
+            if !metadatasInConflict.isEmpty {
+                if let conflict = UIStoryboard(name: "NCCreateFormUploadConflict", bundle: nil).instantiateInitialViewController() as? NCCreateFormUploadConflict {
+                    conflict.account = self.controller.account
+                    conflict.delegate = appDelegate
+                    conflict.serverUrl = serverUrl
+                    conflict.metadatasUploadInConflict = metadatasInConflict
+
+                    self.controller.present(conflict, animated: true, completion: nil)
+                }
             }
         }
     }
+
+    func copySecurityScopedResource(url: URL, urlOut: URL) -> URL? {
+        try? FileManager.default.removeItem(at: urlOut)
+        if url.startAccessingSecurityScopedResource() {
+            do {
+                try FileManager.default.copyItem(at: url, to: urlOut)
+                url.stopAccessingSecurityScopedResource()
+                return urlOut
+            } catch {
+            }
+        }
+        return nil
+    }
 }
-
-

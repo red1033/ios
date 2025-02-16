@@ -22,17 +22,15 @@
 //
 
 import UIKit
-import NCCommunication
+import SwiftUI
+import NextcloudKit
+import Photos
 
-@objc protocol NCCreateFormUploadConflictDelegate {
-    @objc func dismissCreateFormUploadConflict(metadatas: [tableMetadata]?)
+protocol NCCreateFormUploadConflictDelegate: AnyObject {
+    func dismissCreateFormUploadConflict(metadatas: [tableMetadata]?)
 }
 
-extension NCCreateFormUploadConflictDelegate {
-    func dismissCreateFormUploadConflict(metadatas: [tableMetadata]?) {}
-}
-
-@objc class NCCreateFormUploadConflict: UIViewController {
+class NCCreateFormUploadConflict: UIViewController {
 
     @IBOutlet weak var labelTitle: UILabel!
     @IBOutlet weak var labelSubTitle: UILabel!
@@ -49,40 +47,47 @@ extension NCCreateFormUploadConflictDelegate {
     @IBOutlet weak var viewButton: UIView!
     @IBOutlet weak var buttonCancel: UIButton!
     @IBOutlet weak var buttonContinue: UIButton!
-        
-    @objc var metadatasNOConflict: [tableMetadata]
-    @objc var metadatasUploadInConflict: [tableMetadata]
-    @objc var metadatasMOV: [tableMetadata]
-    @objc var serverUrl: String?
-    @objc weak var delegate: NCCreateFormUploadConflictDelegate?
-    @objc var alwaysNewFileNameNumber: Bool = false
-    @objc var textLabelDetailNewFile: String?
-    
-    let appDelegate = UIApplication.shared.delegate as! AppDelegate
+
+    var account: String
+    var metadatasNOConflict: [tableMetadata]
+    var metadatasUploadInConflict: [tableMetadata]
+    var serverUrl: String?
+    var delegate: NCCreateFormUploadConflictDelegate?
+    var alwaysNewFileNameNumber: Bool = false
+    var textLabelDetailNewFile: String?
+
     var metadatasConflictNewFiles: [String] = []
     var metadatasConflictAlreadyExistingFiles: [String] = []
-    var fileNamesPath: [String: String] = [:]
+    let fileNamesPath = ThreadSafeDictionary<String, String>()
     var blurView: UIVisualEffectView!
+
+    let utility = NCUtility()
+    let utilityFileSystem = NCUtilityFileSystem()
 
     // MARK: - View Life Cycle
 
-    @objc required init?(coder aDecoder: NSCoder) {
+    required init?(coder aDecoder: NSCoder) {
+        self.account = ""
         self.metadatasNOConflict = []
-        self.metadatasMOV = []
         self.metadatasUploadInConflict = []
         super.init(coder: aDecoder)
     }
-    
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        
+
         tableView.dataSource = self
         tableView.delegate = self
         tableView.allowsSelection = false
         tableView.tableFooterView = UIView()
-        
-        tableView.register(UINib.init(nibName: "NCCreateFormUploadConflictCell", bundle: nil), forCellReuseIdentifier: "Cell")
-        
+
+        view.backgroundColor = .systemGroupedBackground
+        tableView.backgroundColor = .systemGroupedBackground
+        viewSwitch.backgroundColor = .systemGroupedBackground
+        viewButton.backgroundColor = .systemGroupedBackground
+
+        tableView.register(UINib(nibName: "NCCreateFormUploadConflictCell", bundle: nil), forCellReuseIdentifier: "Cell")
+
         if metadatasUploadInConflict.count == 1 {
             labelTitle.text = String(metadatasUploadInConflict.count) + " " + NSLocalizedString("_file_conflict_num_", comment: "")
             labelSubTitle.text = NSLocalizedString("_file_conflict_desc_", comment: "")
@@ -94,53 +99,42 @@ extension NCCreateFormUploadConflictDelegate {
             labelNewFiles.text = NSLocalizedString("_file_conflict_new_", comment: "")
             labelAlreadyExistingFiles.text = NSLocalizedString("_file_conflict_exists_", comment: "")
         }
-        
+
+        switchNewFiles.onTintColor = NCBrandColor.shared.getElement(account: account)
         switchNewFiles.isOn = false
+        switchAlreadyExistingFiles.onTintColor = NCBrandColor.shared.getElement(account: account)
         switchAlreadyExistingFiles.isOn = false
-        
+
         buttonCancel.layer.cornerRadius = 20
         buttonCancel.layer.masksToBounds = true
+        buttonCancel.layer.borderWidth = 0.5
+        buttonCancel.layer.borderColor = UIColor.darkGray.cgColor
+        buttonCancel.backgroundColor = .systemGray5
         buttonCancel.setTitle(NSLocalizedString("_cancel_", comment: ""), for: .normal)
-        
+        buttonCancel.setTitleColor(NCBrandColor.shared.textColor, for: .normal)
+
         buttonContinue.layer.cornerRadius = 20
         buttonContinue.layer.masksToBounds = true
+        buttonContinue.backgroundColor = NCBrandColor.shared.getElement(account: account)
         buttonContinue.setTitle(NSLocalizedString("_continue_", comment: ""), for: .normal)
         buttonContinue.isEnabled = false
-        buttonContinue.setTitleColor(NCBrandColor.shared.gray, for: .normal)
+        buttonContinue.setTitleColor(.white, for: .normal)
 
         let blurEffect = UIBlurEffect(style: .light)
         blurView = UIVisualEffectView(effect: blurEffect)
         blurView.frame = view.bounds
         blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(blurView)
-        
-        changeTheming()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.conflictDialog(fileCount: self.metadatasUploadInConflict.count)
         }
     }
-    
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        
-        changeTheming()
-    }
-    
-    // MARK: - Theming
-    
-    func changeTheming(){
-        
-        view.backgroundColor = NCBrandColor.shared.systemGroupedBackground
-        tableView.backgroundColor = NCBrandColor.shared.systemGroupedBackground
-        viewSwitch.backgroundColor = NCBrandColor.shared.systemGroupedBackground
-        viewButton.backgroundColor = NCBrandColor.shared.systemGroupedBackground
-    }
-    
+
     // MARK: - ConflictDialog
-    
+
     func conflictDialog(fileCount: Int) {
-        
+
         var tile = ""
         var titleReplace = ""
         var titleKeep = ""
@@ -154,41 +148,43 @@ extension NCCreateFormUploadConflictDelegate {
             titleReplace = NSLocalizedString("_replace_all_action_title_", comment: "")
             titleKeep = NSLocalizedString("_keep_both_for_all_action_title_", comment: "")
         }
-        
+
         let conflictAlert = UIAlertController(title: tile, message: "", preferredStyle: .alert)
 
-        // REPLACE
-        conflictAlert.addAction(UIAlertAction(title: titleReplace, style: .default, handler: { action in
-                        
-            for metadata in self.metadatasUploadInConflict {
-                self.metadatasNOConflict.append(metadata)
-            }
-            
-            self.buttonContinueTouch(action)
-        }))
-        
         // KEEP BOTH
         conflictAlert.addAction(UIAlertAction(title: titleKeep, style: .default, handler: { action in
-            
+
             for metadata in self.metadatasUploadInConflict {
                 self.metadatasConflictNewFiles.append(metadata.ocId)
                 self.metadatasConflictAlreadyExistingFiles.append(metadata.ocId)
             }
-            
+
             self.buttonContinueTouch(action)
         }))
-        
-        conflictAlert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_keep_existing_action_title_", comment: ""), style: .cancel, handler: { (_) in
-            self.dismiss(animated: true, completion: nil)
+
+        // REPLACE
+        conflictAlert.addAction(UIAlertAction(title: titleReplace, style: .default, handler: { action in
+            for metadata in self.metadatasUploadInConflict {
+                self.metadatasNOConflict.append(metadata)
+            }
+            self.buttonContinueTouch(action)
         }))
-        
-        conflictAlert.addAction(UIAlertAction(title: NSLocalizedString("_more_action_title_", comment: ""), style: .default, handler: { (_) in
+
+        // MORE
+        conflictAlert.addAction(UIAlertAction(title: NSLocalizedString("_more_action_title_", comment: ""), style: .default, handler: { _ in
             self.blurView.removeFromSuperview()
         }))
-        
+
+        // CANCEL
+        conflictAlert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_keep_existing_action_title_", comment: ""), style: .cancel, handler: { _ in
+            self.dismiss(animated: true) {
+                self.delegate?.dismissCreateFormUploadConflict(metadatas: nil)
+            }
+        }))
+
         self.present(conflictAlert, animated: true, completion: nil)
     }
-    
+
     // MARK: - Action
 
     @IBAction func valueChangedSwitchNewFiles(_ sender: Any) {
@@ -199,132 +195,98 @@ extension NCCreateFormUploadConflictDelegate {
                 metadatasConflictNewFiles.append(metadata.ocId)
             }
         }
-        
+
        verifySwith()
     }
-    
+
     @IBAction func valueChangedSwitchAlreadyExistingFiles(_ sender: Any) {
         metadatasConflictAlreadyExistingFiles.removeAll()
-        
+
         if switchAlreadyExistingFiles.isOn {
             for metadata in metadatasUploadInConflict {
                 metadatasConflictAlreadyExistingFiles.append(metadata.ocId)
             }
         }
-        
+
         verifySwith()
     }
-    
+
     func verifySwith() {
-        
+
         if alwaysNewFileNameNumber && switchNewFiles.isOn {
             metadatasConflictNewFiles.removeAll()
             metadatasConflictAlreadyExistingFiles.removeAll()
-            
+
             for metadata in metadatasUploadInConflict {
                 metadatasConflictNewFiles.append(metadata.ocId)
             }
             for metadata in metadatasUploadInConflict {
                 metadatasConflictAlreadyExistingFiles.append(metadata.ocId)
             }
-            
+
             switchAlreadyExistingFiles.isOn = true
-            NCContentPresenter.shared.messageNotification("_info_", description: "_file_not_rewite_doc_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.info, errorCode: NCGlobal.shared.errorInternalError)
+            let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_file_not_rewite_doc_")
+            NCContentPresenter().showInfo(error: error)
         }
-        
+
         tableView.reloadData()
         canContinue()
     }
-        
+
     @IBAction func buttonCancelTouch(_ sender: Any) {
-        
-        delegate?.dismissCreateFormUploadConflict(metadatas: nil)
-        dismiss(animated: true)
+        dismiss(animated: true) {
+            self.delegate?.dismissCreateFormUploadConflict(metadatas: nil)
+        }
     }
-    
+
     @IBAction func buttonContinueTouch(_ sender: Any) {
-        
+
         for metadata in metadatasUploadInConflict {
-            
+
             // keep both
             if metadatasConflictNewFiles.contains(metadata.ocId) && metadatasConflictAlreadyExistingFiles.contains(metadata.ocId) {
-            
-                let fileNameMOV = (metadata.fileNameView as NSString).deletingPathExtension + ".mov"
+
                 var fileName = metadata.fileNameView
                 let fileNameExtension = (fileName as NSString).pathExtension.lowercased()
-                let fileNameWithoutExtension = (fileName as NSString).deletingPathExtension
-                if fileNameExtension == "heic" && CCUtility.getFormatCompatibility() {
-                    fileName = fileNameWithoutExtension + ".jpg"
+                let fileNameNoExtension = (fileName as NSString).deletingPathExtension
+                if fileNameExtension == "heic" && !metadata.nativeFormat {
+                    fileName = fileNameNoExtension + ".jpg"
                 }
-                let oldPath = CCUtility.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView)
-                let newFileName = NCUtilityFileSystem.shared.createFileName(fileName, serverUrl: metadata.serverUrl, account: metadata.account)
-                
+                let oldPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView)
+                let newFileName = utilityFileSystem.createFileName(fileName, serverUrl: metadata.serverUrl, account: metadata.account)
+
                 metadata.ocId = UUID().uuidString
                 metadata.fileName = newFileName
                 metadata.fileNameView = newFileName
-                
+
                 // This is not an asset - [file]
-                if metadata.assetLocalIdentifier == "" {
-                    let newPath = CCUtility.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: newFileName)
-                    CCUtility.moveFile(atPath: oldPath, toPath: newPath)
+                if metadata.assetLocalIdentifier.isEmpty || metadata.isExtractFile {
+                    let newPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: newFileName)
+                    utilityFileSystem.moveFile(atPath: oldPath, toPath: newPath)
                 }
-                
+
                 metadatasNOConflict.append(metadata)
-                
-                // MOV (Live Photo)
-                if let metadataMOV = self.metadatasMOV.first(where: { $0.fileName == fileNameMOV }) {
-                    
-                    let oldPath = CCUtility.getDirectoryProviderStorageOcId(metadataMOV.ocId, fileNameView: metadataMOV.fileNameView)
-                    let newFileNameMOV = (newFileName as NSString).deletingPathExtension + ".mov"
-                    
-                    metadataMOV.ocId = UUID().uuidString
-                    metadataMOV.fileName = newFileNameMOV
-                    metadataMOV.fileNameView = newFileNameMOV
-                    
-                    let newPath = CCUtility.getDirectoryProviderStorageOcId(metadataMOV.ocId, fileNameView: newFileNameMOV)
-                    CCUtility.moveFile(atPath: oldPath, toPath: newPath)
-                }
-                
+
             // overwrite
             } else if metadatasConflictNewFiles.contains(metadata.ocId) {
-                
+
                 metadatasNOConflict.append(metadata)
-            
-            // remove (MOV)
-            } else if metadatasConflictAlreadyExistingFiles.contains(metadata.ocId) {
-                
-                let fileNameMOV = (metadata.fileNameView as NSString).deletingPathExtension + ".mov"
-                var index = 0
-                
-                for metadataMOV in metadatasMOV {
-                    if metadataMOV.fileNameView == fileNameMOV {
-                        metadatasMOV.remove(at: index)
-                        break
-                    }
-                    index += 1
-                }
-                
+
             } else {
-                print("error")
+                // used UIAlert (replace all)
             }
         }
-        
-        metadatasNOConflict.append(contentsOf: metadatasMOV)
-        
-        if delegate != nil {
-            delegate?.dismissCreateFormUploadConflict(metadatas: metadatasNOConflict)
-        } else {
-            appDelegate.networkingProcessUpload?.createProcessUploads(metadatas: metadatasNOConflict)
+
+        dismiss(animated: true) {
+            self.delegate?.dismissCreateFormUploadConflict(metadatas: self.metadatasNOConflict)
         }
-                
-        dismiss(animated: true)
     }
 }
 
 // MARK: - UITableViewDelegate
 
 extension NCCreateFormUploadConflict: UITableViewDelegate {
-    
+
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         if metadatasUploadInConflict.count == 1 {
             return 250
@@ -337,23 +299,22 @@ extension NCCreateFormUploadConflict: UITableViewDelegate {
 // MARK: - UITableViewDataSource
 
 extension NCCreateFormUploadConflict: UITableViewDataSource {
-    
+
     func numberOfSections(in tableView: UITableView) -> Int {
         return 1
     }
-    
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return metadatasUploadInConflict.count
     }
-    
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        
-        if let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath) as? NCCreateFormUploadConflictCell {
-            
-            cell.backgroundColor = tableView.backgroundColor
-            
-            let metadataNewFile = metadatasUploadInConflict[indexPath.row]
 
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath) as? NCCreateFormUploadConflictCell {
+            let metadataNewFile = tableMetadata.init(value: metadatasUploadInConflict[indexPath.row])
+
+            cell.backgroundColor = tableView.backgroundColor
+            cell.switchNewFile.onTintColor = NCBrandColor.shared.getElement(account: metadataNewFile.account)
+            cell.switchAlreadyExistingFile.onTintColor = NCBrandColor.shared.getElement(account: metadataNewFile.account)
             cell.ocId = metadataNewFile.ocId
             cell.delegate = self
             cell.labelFileName.text = metadataNewFile.fileNameView
@@ -361,50 +322,50 @@ extension NCCreateFormUploadConflict: UITableViewDataSource {
             cell.labelDetailNewFile.text = ""
 
             // -----> Already Existing File
-            
-            guard let metadataAlreadyExists = NCManageDatabase.shared.getMetadataConflict(account: metadataNewFile.account, serverUrl: metadataNewFile.serverUrl, fileName: metadataNewFile.fileNameView) else { return UITableViewCell() }
-            if FileManager().fileExists(atPath: CCUtility.getDirectoryProviderStorageIconOcId(metadataAlreadyExists.ocId, etag: metadataAlreadyExists.etag)) {
-                cell.imageAlreadyExistingFile.image =  UIImage(contentsOfFile: CCUtility.getDirectoryProviderStorageIconOcId(metadataAlreadyExists.ocId, etag: metadataAlreadyExists.etag))
-            } else if FileManager().fileExists(atPath: CCUtility.getDirectoryProviderStorageOcId(metadataAlreadyExists.ocId, fileNameView: metadataAlreadyExists.fileNameView)) && metadataAlreadyExists.contentType == "application/pdf" {
-            
-                let url = URL(fileURLWithPath: CCUtility.getDirectoryProviderStorageOcId(metadataAlreadyExists.ocId, fileNameView: metadataAlreadyExists.fileNameView))
-                if let image = NCUtility.shared.pdfThumbnail(url: url) {
+
+            guard let metadataAlreadyExists = NCManageDatabase.shared.getMetadataConflict(account: metadataNewFile.account, serverUrl: metadataNewFile.serverUrl, fileNameView: metadataNewFile.fileNameView, nativeFormat: metadataNewFile.nativeFormat) else { return UITableViewCell() }
+            if utility.existsImage(ocId: metadataAlreadyExists.ocId, etag: metadataAlreadyExists.etag, ext: NCGlobal.shared.previewExt512) {
+                cell.imageAlreadyExistingFile.image = UIImage(contentsOfFile: utilityFileSystem.getDirectoryProviderStorageImageOcId(metadataAlreadyExists.ocId, etag: metadataAlreadyExists.etag, ext: NCGlobal.shared.previewExt512))
+            } else if FileManager().fileExists(atPath: utilityFileSystem.getDirectoryProviderStorageOcId(metadataAlreadyExists.ocId, fileNameView: metadataAlreadyExists.fileNameView)) && metadataAlreadyExists.contentType == "application/pdf" {
+
+                let url = URL(fileURLWithPath: utilityFileSystem.getDirectoryProviderStorageOcId(metadataAlreadyExists.ocId, fileNameView: metadataAlreadyExists.fileNameView))
+                if let image = utility.pdfThumbnail(url: url) {
                     cell.imageAlreadyExistingFile.image = image
                 } else {
-                    cell.imageAlreadyExistingFile.image = UIImage.init(named: metadataAlreadyExists.iconName)
+                    cell.imageAlreadyExistingFile.image = UIImage(named: metadataAlreadyExists.iconName)
                 }
-            
+
             } else {
-                if metadataAlreadyExists.iconName.count > 0 {
-                    cell.imageAlreadyExistingFile.image = UIImage.init(named: metadataAlreadyExists.iconName)
+                if metadataAlreadyExists.iconName.isEmpty {
+                    cell.imageAlreadyExistingFile.image = NCImageCache.shared.getImageFile()
                 } else {
-                    cell.imageAlreadyExistingFile.image = UIImage.init(named: "file")
+                    cell.imageAlreadyExistingFile.image = UIImage(named: metadataAlreadyExists.iconName)
                 }
             }
-            cell.labelDetailAlreadyExistingFile.text = CCUtility.dateDiff(metadataAlreadyExists.date as Date) + "\n" + CCUtility.transformedSize(metadataAlreadyExists.size)
-                
+            cell.labelDetailAlreadyExistingFile.text = utility.dateDiff(metadataAlreadyExists.date as Date) + "\n" + utilityFileSystem.transformedSize(metadataAlreadyExists.size)
+
             if metadatasConflictAlreadyExistingFiles.contains(metadataNewFile.ocId) {
                 cell.switchAlreadyExistingFile.isOn = true
             } else {
                 cell.switchAlreadyExistingFile.isOn = false
             }
-            
+
             // -----> New File
-            
-            if metadataNewFile.iconName.count > 0 {
-                cell.imageNewFile.image = UIImage.init(named: metadataNewFile.iconName)
+
+            if metadataNewFile.iconName.isEmpty {
+                cell.imageNewFile.image = NCImageCache.shared.getImageFile()
             } else {
-                cell.imageNewFile.image = UIImage.init(named: "file")
+                cell.imageNewFile.image = UIImage(named: metadataNewFile.iconName)
             }
-            let filePathNewFile = CCUtility.getDirectoryProviderStorageOcId(metadataNewFile.ocId, fileNameView: metadataNewFile.fileNameView)!
-            if metadataNewFile.assetLocalIdentifier.count > 0 {
-                
+            let filePathNewFile = utilityFileSystem.getDirectoryProviderStorageOcId(metadataNewFile.ocId, fileNameView: metadataNewFile.fileNameView)
+            if !metadataNewFile.assetLocalIdentifier.isEmpty {
+
                 let result = PHAsset.fetchAssets(withLocalIdentifiers: [metadataNewFile.assetLocalIdentifier], options: nil)
                 let date = result.firstObject!.modificationDate
                 let mediaType = result.firstObject!.mediaType
-                
+
                 if let fileNamePath = self.fileNamesPath[metadataNewFile.fileNameView] {
-                    
+
                     do {
                         if mediaType == PHAssetMediaType.image {
                             let data = try Data(contentsOf: URL(fileURLWithPath: fileNamePath))
@@ -412,90 +373,83 @@ extension NCCreateFormUploadConflict: UITableViewDataSource {
                                 cell.imageNewFile.image = image
                             }
                         } else if mediaType == PHAssetMediaType.video {
-                            if let image = NCUtility.shared.imageFromVideo(url: URL(fileURLWithPath: fileNamePath), at: 0) {
+                            if let image = utility.imageFromVideo(url: URL(fileURLWithPath: fileNamePath), at: 0) {
                                 cell.imageNewFile.image = image
                             }
                         }
-                        
+
                         let fileDictionary = try FileManager.default.attributesOfItem(atPath: fileNamePath)
-                        let fileSize = fileDictionary[FileAttributeKey.size] as! Int64
-                        
-                        cell.labelDetailNewFile.text = CCUtility.dateDiff(date) + "\n" + CCUtility.transformedSize(fileSize)
-                        
+                        let fileSize = fileDictionary[FileAttributeKey.size] as? Int64 ?? 0
+
+                        cell.labelDetailNewFile.text = utility.dateDiff(date) + "\n" + utilityFileSystem.transformedSize(fileSize)
+
                     } catch { print("Error: \(error)") }
-                    
+
                 } else {
-                    
-                    CCUtility.extractImageVideoFromAssetLocalIdentifier(forUpload: metadataNewFile, notification: false) { (metadataNew, fileNamePath) in
-                       
-                        if metadataNew != nil {
+
+                    // PREVIEW
+                    let cameraRoll = NCCameraRoll()
+                    cameraRoll.extractImageVideoFromAssetLocalIdentifier(metadata: metadataNewFile, modifyMetadataForUpload: false) { _, fileNamePath, error in
+                        if !error {
                             self.fileNamesPath[metadataNewFile.fileNameView] = fileNamePath!
-                            
                             do {
-                                
                                 let fileDictionary = try FileManager.default.attributesOfItem(atPath: fileNamePath!)
-                                let fileSize = fileDictionary[FileAttributeKey.size] as! Int64
-                                
+                                let fileSize = fileDictionary[FileAttributeKey.size] as? Int64 ?? 0
                                 if mediaType == PHAssetMediaType.image {
                                     let data = try Data(contentsOf: URL(fileURLWithPath: fileNamePath!))
                                     if let image = UIImage(data: data) {
-                                        cell.imageNewFile.image = image
+                                        DispatchQueue.main.async { cell.imageNewFile.image = image }
                                     }
                                 } else if mediaType == PHAssetMediaType.video {
-                                    if let image = NCUtility.shared.imageFromVideo(url: URL(fileURLWithPath: fileNamePath!), at: 0) {
-                                        cell.imageNewFile.image = image
+                                    if let image = self.utility.imageFromVideo(url: URL(fileURLWithPath: fileNamePath!), at: 0) {
+                                        DispatchQueue.main.async { cell.imageNewFile.image = image }
                                     }
                                 }
-                                
-                                cell.labelDetailNewFile.text = CCUtility.dateDiff(date) + "\n" + CCUtility.transformedSize(fileSize)
-                               
+                                DispatchQueue.main.async { cell.labelDetailNewFile.text = self.utility.dateDiff(date) + "\n" + self.utilityFileSystem.transformedSize(fileSize) }
                             } catch { print("Error: \(error)") }
                         }
                     }
                 }
-                      
+
             } else if FileManager().fileExists(atPath: filePathNewFile) {
-                
+
                 do {
-                    if metadataNewFile.classFile ==  NCCommunicationCommon.typeClassFile.image.rawValue {
-                        let data = try Data(contentsOf: URL(fileURLWithPath: filePathNewFile))
-                        if let image = UIImage(data: data) {
+                    if metadataNewFile.classFile == NKCommon.TypeClassFile.image.rawValue {
+                        // preserver memory especially for very large files in Share extension
+                        if let image = UIImage.downsample(imageAt: URL(fileURLWithPath: filePathNewFile), to: cell.imageNewFile.frame.size) {
                             cell.imageNewFile.image = image
                         }
                     }
-                    
+
                     let fileDictionary = try FileManager.default.attributesOfItem(atPath: filePathNewFile)
-                    let fileSize = fileDictionary[FileAttributeKey.size] as! Int64
-                    
-                    cell.labelDetailNewFile.text = CCUtility.dateDiff(metadataNewFile.date as Date) + "\n" + CCUtility.transformedSize(fileSize)
-                    
+                    let fileSize = fileDictionary[FileAttributeKey.size] as? Int64 ?? 0
+
+                    cell.labelDetailNewFile.text = utility.dateDiff(metadataNewFile.date as Date) + "\n" + utilityFileSystem.transformedSize(fileSize)
+
                 } catch { print("Error: \(error)") }
-                
-            } else {
-                
-                CCUtility.dateDiff(metadataNewFile.date as Date)
+
             }
-            
+
             if metadatasConflictNewFiles.contains(metadataNewFile.ocId) {
                 cell.switchNewFile.isOn = true
             } else {
                 cell.switchNewFile.isOn = false
             }
-        
+
             // Hide switch if only one
             if metadatasUploadInConflict.count == 1 {
                 cell.switchAlreadyExistingFile.isHidden = true
                 cell.switchNewFile.isHidden = true
             }
-            
+
             // text label new file
             if textLabelDetailNewFile != nil {
                 cell.labelDetailNewFile.text = textLabelDetailNewFile! + "\n"
             }
-            
+
             return cell
         }
-        
+
         return UITableViewCell()
     }
 }
@@ -503,7 +457,7 @@ extension NCCreateFormUploadConflict: UITableViewDataSource {
 // MARK: - NCCreateFormUploadConflictCellDelegate
 
 extension NCCreateFormUploadConflict: NCCreateFormUploadConflictCellDelegate {
-    
+
     func valueChangedSwitchNewFile(with ocId: String, isOn: Bool) {
         if let index = metadatasConflictNewFiles.firstIndex(of: ocId) {
             metadatasConflictNewFiles.remove(at: index)
@@ -516,10 +470,10 @@ extension NCCreateFormUploadConflict: NCCreateFormUploadConflictCellDelegate {
         } else {
             switchNewFiles.isOn = false
         }
-        
+
         canContinue()
     }
-    
+
     func valueChangedSwitchAlreadyExistingFile(with ocId: String, isOn: Bool) {
         if let index = metadatasConflictAlreadyExistingFiles.firstIndex(of: ocId) {
             metadatasConflictAlreadyExistingFiles.remove(at: index)
@@ -532,26 +486,52 @@ extension NCCreateFormUploadConflict: NCCreateFormUploadConflictCellDelegate {
         } else {
             switchAlreadyExistingFiles.isOn = false
         }
-        
+
         canContinue()
     }
-    
+
     func canContinue() {
         var result = true
-        
+
         for metadata in metadatasUploadInConflict {
             if !metadatasConflictNewFiles.contains(metadata.ocId) && !metadatasConflictAlreadyExistingFiles.contains(metadata.ocId) {
                 result = false
             }
         }
-        
+
         if result {
             buttonContinue.isEnabled = true
-            buttonContinue.setTitleColor(NCBrandColor.shared.label, for: .normal)
+            buttonContinue.setTitleColor(NCBrandColor.shared.textColor, for: .normal)
         } else {
             buttonContinue.isEnabled = false
-            buttonContinue.setTitleColor(NCBrandColor.shared.gray, for: .normal)
+            buttonContinue.setTitleColor(NCBrandColor.shared.textColor2, for: .normal)
         }
     }
 }
 
+// MARK: - UIViewControllerRepresentable
+
+struct UploadConflictView: UIViewControllerRepresentable {
+
+    typealias UIViewControllerType = NCCreateFormUploadConflict
+    var delegate: NCCreateFormUploadConflictDelegate
+    var serverUrl: String
+    var metadatasUploadInConflict: [tableMetadata]
+    var metadatasNOConflict: [tableMetadata]
+
+    func makeUIViewController(context: Context) -> UIViewControllerType {
+
+        let storyboard = UIStoryboard(name: "NCCreateFormUploadConflict", bundle: nil)
+        let viewController = storyboard.instantiateInitialViewController() as? NCCreateFormUploadConflict
+
+        viewController?.delegate = delegate
+        viewController?.textLabelDetailNewFile = NSLocalizedString("_now_", comment: "")
+        viewController?.serverUrl = serverUrl
+        viewController?.metadatasUploadInConflict = metadatasUploadInConflict
+        viewController?.metadatasNOConflict = metadatasNOConflict
+
+        return viewController!
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewControllerType, context: Context) { }
+}

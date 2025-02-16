@@ -22,103 +22,63 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
+import RealmSwift
 
-class NCOffline: NCCollectionViewCommon  {
-    
-    // MARK: - View Life Cycle
+class NCOffline: NCCollectionViewCommon {
 
     required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
-        
+
         titleCurrentFolder = NSLocalizedString("_manage_file_offline_", comment: "")
         layoutKey = NCGlobal.shared.layoutViewOffline
-        enableSearchBar = true
-        emptyImage = UIImage.init(named: "folder")?.image(color: NCBrandColor.shared.brandElement, size: UIScreen.main.bounds.width)
+        enableSearchBar = false
+        headerRichWorkspaceDisable = true
+        emptyImageName = "icloud.and.arrow.down"
         emptyTitle = "_files_no_files_"
         emptyDescription = "_tutorial_offline_view_"
+        emptyDataPortaitOffset = 30
+        emptyDataLandscapeOffset = 20
     }
-    
-    // MARK: - DataSource + NC Endpoint
+
+    // MARK: - View Life Cycle
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+
+        reloadDataSource()
+    }
+
+    // MARK: - DataSource
 
     override func reloadDataSource() {
-        super.reloadDataSource()
-              
-        DispatchQueue.global().async {
-            
-            var ocIds: [String] = []
-            
-            if !self.isSearching {
-                
-                if self.serverUrl == "" {
-                   
-                    if let directories = NCManageDatabase.shared.getTablesDirectory(predicate: NSPredicate(format: "account == %@ AND offline == true", self.appDelegate.account), sorted: "serverUrl", ascending: true) {
-                        for directory: tableDirectory in directories {
-                            ocIds.append(directory.ocId)
-                        }
-                    }
-                   
-                    let files = NCManageDatabase.shared.getTableLocalFiles(predicate: NSPredicate(format: "account == %@ AND offline == true", self.appDelegate.account), sorted: "fileName", ascending: true)
-                    for file: tableLocalFile in files {
-                        ocIds.append(file.ocId)
-                    }
-                   
-                    self.metadatasSource = NCManageDatabase.shared.getMetadatas(predicate: NSPredicate(format: "account == %@ AND ocId IN %@", self.appDelegate.account, ocIds))
-                    
-                } else {
-                   
-                    self.metadatasSource = NCManageDatabase.shared.getMetadatas(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", self.appDelegate.account, self.serverUrl))
+        var ocIds: [String] = []
+        var metadatas: [tableMetadata] = []
+        let directoryOnTop = NCKeychain().getDirectoryOnTop(account: session.account)
+
+        if self.serverUrl.isEmpty {
+            if let directories = self.database.getTablesDirectory(predicate: NSPredicate(format: "account == %@ AND offline == true", session.account), sorted: "serverUrl", ascending: true) {
+                for directory: tableDirectory in directories {
+                    ocIds.append(directory.ocId)
                 }
             }
-            
-            self.dataSource = NCDataSource.init(metadatasSource: self.metadatasSource, sort: self.layoutForView?.sort, ascending: self.layoutForView?.ascending, directoryOnTop: self.layoutForView?.directoryOnTop, favoriteOnTop: true, filterLivePhoto: true)
-            
-            DispatchQueue.main.async {
-                self.refreshControl.endRefreshing()
-                self.collectionView.reloadData()
+            let files = self.database.getTableLocalFiles(predicate: NSPredicate(format: "account == %@ AND offline == true", session.account), sorted: "fileName", ascending: true)
+            for file in files {
+                ocIds.append(file.ocId)
             }
-        }
-    }
-       
-    override func reloadDataSourceNetwork(forced: Bool = false) {
-        super.reloadDataSourceNetwork(forced: forced)
-        
-        if isSearching {
-            networkSearch()
-            return
-        }
-                    
-        if serverUrl == "" {
-            
-            self.reloadDataSource()
-            
+            if let results = self.database.getResultsMetadatas(predicate: NSPredicate(format: "account == %@ AND ocId IN %@ AND NOT (status IN %@)", session.account, ocIds, global.metadataStatusHideInView)) {
+                metadatas = Array(results.freeze())
+            }
         } else {
-           
-            isReloadDataSourceNetworkInProgress = true
-            collectionView?.reloadData()
-            
-            networkReadFolder(forced: forced) { (tableDirectory, metadatas, metadatasUpdate, metadatasDelete, errorCode, errorDescription) in
-                if errorCode == 0 {
-                    for metadata in metadatas ?? [] {
-                        if !metadata.directory {
-                            if NCManageDatabase.shared.isDownloadMetadata(metadata, download: true) {
-                                NCOperationQueue.shared.download(metadata: metadata, selector: NCGlobal.shared.selectorDownloadFile)
-                            }
-                        }
-                    }
-                }
-                
-                DispatchQueue.main.async {
-                    self.refreshControl.endRefreshing()
-                    self.isReloadDataSourceNetworkInProgress = false
-                    self.richWorkspaceText = tableDirectory?.richWorkspace
-                    if metadatasUpdate?.count ?? 0 > 0 || metadatasDelete?.count ?? 0 > 0 || forced {
-                        self.reloadDataSource()
-                    } else {
-                        self.collectionView?.reloadData()
-                    }
-                }
-            }
+            metadatas = self.database.getResultsMetadatasPredicate(self.defaultPredicate, layoutForView: layoutForView, directoryOnTop: directoryOnTop)
         }
+
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView, directoryOnTop: directoryOnTop)
+
+        super.reloadDataSource()
+    }
+
+    override func getServerData() {
+        reloadDataSource()
     }
 }

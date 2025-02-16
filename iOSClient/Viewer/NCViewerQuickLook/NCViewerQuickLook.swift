@@ -4,8 +4,11 @@
 //
 //  Created by Marino Faggiana on 03/05/2020.
 //  Copyright © 2020 Marino Faggiana. All rights reserved.
+//  Copyright © 2022 Henrik Storch. All rights reserved.
+//  Copyright © 2023 Marino Faggiana. All rights reserved.
 //
 //  Author Marino Faggiana <marino.faggiana@nextcloud.com>
+//  Author Henrik Storch <henrik.storch@nextcloud.com>
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -23,165 +26,275 @@
 
 import UIKit
 import QuickLook
-import NCCommunication
+import NextcloudKit
+import Mantis
+import SwiftUI
+
+public protocol NCViewerQuickLookDelegate: AnyObject {
+    func dismissQuickLook(fileNameSource: String, hasChangesQuickLook: Bool)
+}
+
+// optional func
+public extension NCViewerQuickLookDelegate {
+    func dismissQuickLook(fileNameSource: String, hasChangesQuickLook: Bool) {}
+}
+
+// if the document has any changes
+private var hasChangesQuickLook: Bool = false
 
 @objc class NCViewerQuickLook: QLPreviewController {
-    
-    let appDelegate = UIApplication.shared.delegate as! AppDelegate
-    var url: URL?
-    var previewItems: [PreviewItem] = []
-    var editingMode: Bool
-    enum saveModeType{
-        case overwrite
-        case copy
-        case discard
-    }
-    var saveMode: saveModeType = .discard
-    var metadata: tableMetadata?
-        
+    private let url: URL
+    private let fileNameSource: String
+    private var previewItems: [PreviewItem] = []
+    private var isEditingEnabled: Bool
+    private var metadata: tableMetadata?
+    private var timer: Timer?
+    // used to display the save alert
+    private var parentVC: UIViewController?
+    private let utilityFileSystem = NCUtilityFileSystem()
+
+    public var saveAsCopyAlert: Bool = true
+    public var uploadMetadata: Bool = true
+    public weak var delegateQuickLook: NCViewerQuickLookDelegate?
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
-    @objc init(with url: URL, editingMode: Bool, metadata: tableMetadata?) {
-        
+
+    @objc init(with url: URL, fileNameSource: String = "", isEditingEnabled: Bool, metadata: tableMetadata?) {
         self.url = url
-        self.editingMode = editingMode
+        self.fileNameSource = fileNameSource
+        self.isEditingEnabled = isEditingEnabled
         if let metadata = metadata {
             self.metadata = tableMetadata.init(value: metadata)
         }
-        
         let previewItem = PreviewItem()
         previewItem.previewItemURL = url
         self.previewItems.append(previewItem)
 
         super.init(nibName: nil, bundle: nil)
-        
+
         self.dataSource = self
         self.delegate = self
         self.currentPreviewItemIndex = 0
-
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissPreviewController))
+        hasChangesQuickLook = false
     }
-    
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        
-        if editingMode && metadata?.classFile == NCCommunicationCommon.typeClassFile.image.rawValue {
-            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true, block: { (t) in
-                if self.navigationItem.rightBarButtonItems?.count ?? 0 > 1 || !(self.navigationController?.isToolbarHidden ?? false) {
-                    if #available(iOS 14.0, *) {
-                        if self.navigationItem.rightBarButtonItems?.count ?? 0 > 1 {
-                            if let buttonItem = self.navigationItem.rightBarButtonItems?.last {
-                                _ = buttonItem.target?.perform(buttonItem.action, with: buttonItem)
-                            }
-                        } else {
-                            if let buttonItem = self.navigationItem.rightBarButtonItems?.first {
-                                _ = buttonItem.target?.perform(buttonItem.action, with: buttonItem)
-                            }
-                        }
-                    } else {
-                        if let buttonItem = self.navigationItem.rightBarButtonItems?.filter({$0.customView != nil}).first?.customView as? UIButton {
-                            buttonItem.sendActions(for: .touchUpInside)
-                        }
-                    }
-                    t.invalidate()
-                }
-            })
+        guard isEditingEnabled else { return }
+
+        if metadata?.isLivePhoto == true {
+            let error = NKError(errorCode: NCGlobal.shared.errorCharactersForbidden, errorDescription: "_message_disable_overwrite_livephoto_")
+            NCContentPresenter().showInfo(error: error)
         }
-        
-        if editingMode && metadata?.livePhoto == true {
-            NCContentPresenter.shared.messageNotification("", description: "_message_disable_overwrite_livephoto_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.info, errorCode: NCGlobal.shared.errorCharactersForbidden)
+
+        if let metadata = metadata, metadata.isImage {
+            let buttonDone = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissView))
+            let buttonCrop = UIBarButtonItem(image: NCUtility().loadImage(named: "crop"), style: .plain, target: self, action: #selector(crop))
+            navigationItem.leftBarButtonItems = [buttonDone, buttonCrop]
+            startTimer(navigationItem: navigationItem)
         }
     }
-    
-    @objc func dismissPreviewController() {
-        
-        if editingMode {
-            
-            let alertController = UIAlertController(title: NSLocalizedString("_save_", comment: ""), message: "", preferredStyle: .alert)
-            
-            if metadata?.livePhoto == false {
-                alertController.addAction(UIAlertAction(title: NSLocalizedString("_overwrite_original_", comment: ""), style: .default) { (action:UIAlertAction) in
-                    self.saveMode = .overwrite
-                    self.dismiss(animated: true)
-                })
-            }
-            
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("_save_as_copy_", comment: ""), style: .default) { (action:UIAlertAction) in
-                self.saveMode = .copy
-                self.dismiss(animated: true)
-            })
-            
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("_discard_changes_", comment: ""), style: .destructive) { (action:UIAlertAction) in
-                self.saveMode = .discard
-                self.dismiss(animated: true)
-            })
-            
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel) { (action:UIAlertAction) in })
-            
-            self.present(alertController, animated: true)
-            
-        } else {
-            
-            self.dismiss(animated: true)
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // needs to be saved bc in didDisappear presentingVC is already nil
+        parentVC = presentingViewController
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if let metadata = metadata, metadata.classFile != NKCommon.TypeClassFile.image.rawValue {
+            dismissView()
         }
+    }
+
+    func startTimer(navigationItem: UINavigationItem) {
+        self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true, block: { _ in
+            guard let buttonDone = navigationItem.leftBarButtonItems?.first, let buttonCrop = navigationItem.leftBarButtonItems?.last else { return }
+            buttonCrop.isEnabled = true
+            buttonDone.isEnabled = true
+            if let markup = navigationItem.rightBarButtonItems?.first(where: { $0.accessibilityIdentifier == "QLOverlayMarkupButtonAccessibilityIdentifier" }) {
+                if let originalButton = markup.value(forKey: "originalButton") as AnyObject? {
+                    if let symbolImageName = originalButton.value(forKey: "symbolImageName") as? String {
+                        if symbolImageName == "pencil.tip.crop.circle.on" {
+                            buttonCrop.isEnabled = false
+                            buttonDone.isEnabled = false
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    @objc private func dismissView() {
+        guard isEditingEnabled, hasChangesQuickLook, let metadata = metadata else {
+            dismiss(animated: true)
+            return
+        }
+        let alertController = UIAlertController(title: NSLocalizedString("_save_", comment: ""), message: nil, preferredStyle: .alert)
+        var message: String?
+
+        if metadata.isLivePhoto {
+            message = NSLocalizedString("_message_disable_overwrite_livephoto_", comment: "")
+        } else if metadata.lock {
+            message = NSLocalizedString("_file_locked_no_override_", comment: "")
+        } else {
+            alertController.addAction(UIAlertAction(title: NSLocalizedString("_overwrite_original_", comment: ""), style: .default) { _ in
+                self.saveModifiedFile(override: true)
+                self.delegateQuickLook?.dismissQuickLook(fileNameSource: self.fileNameSource, hasChangesQuickLook: hasChangesQuickLook)
+            })
+        }
+
+        alertController.message = message
+
+        if saveAsCopyAlert {
+            alertController.addAction(UIAlertAction(title: NSLocalizedString("_save_as_copy_", comment: ""), style: .default) { _ in
+                self.saveModifiedFile(override: false)
+                self.delegateQuickLook?.dismissQuickLook(fileNameSource: self.fileNameSource, hasChangesQuickLook: hasChangesQuickLook)
+            })
+        }
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel) { _ in
+        })
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("_discard_changes_", comment: ""), style: .destructive) { _ in
+            self.dismiss(animated: true)
+        })
+
+        if metadata.isImage {
+            present(alertController, animated: true)
+        } else {
+            parentVC?.present(alertController, animated: true)
+        }
+    }
+
+    @objc private func crop() {
+        guard let image = UIImage(contentsOfFile: url.path) else { return }
+        var toolbarConfig = CropToolbarConfig()
+
+        toolbarConfig.heightForVerticalOrientation = 80
+        toolbarConfig.widthForHorizontalOrientation = 100
+        toolbarConfig.optionButtonFontSize = 16
+        toolbarConfig.optionButtonFontSizeForPad = 21
+        toolbarConfig.backgroundColor = .systemGray6
+        toolbarConfig.foregroundColor = .systemBlue
+
+        var viewConfig = CropViewConfig()
+        viewConfig.cropMaskVisualEffectType = .none
+        viewConfig.cropBorderColor = .red
+
+        var config = Mantis.Config()
+        if let bundleIdentifier = Bundle.main.bundleIdentifier {
+            config.localizationConfig.bundle = Bundle(identifier: bundleIdentifier)
+            config.localizationConfig.tableName = "Localizable"
+        }
+        config.cropToolbarConfig = toolbarConfig
+        config.cropViewConfig = viewConfig
+
+        let toolbar = CropToolbar()
+        toolbar.iconProvider = CropToolbarIcon()
+
+        let cropViewController = Mantis.cropViewController(image: image, config: config, cropToolbar: toolbar)
+        cropViewController.delegate = self
+        cropViewController.backgroundColor = .systemBackground
+        cropViewController.modalPresentationStyle = .fullScreen
+
+        self.present(cropViewController, animated: true)
     }
 }
 
 extension NCViewerQuickLook: QLPreviewControllerDataSource, QLPreviewControllerDelegate {
-    
+
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
         previewItems.count
     }
-    
+
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
         previewItems[index]
     }
-    
-    func previewController(_ controller: QLPreviewController, didUpdateContentsOf previewItem: QLPreviewItem) {
-    }
-    
-    @available(iOS 13.0, *)
+
     func previewController(_ controller: QLPreviewController, editingModeFor previewItem: QLPreviewItem) -> QLPreviewItemEditingMode {
-        if editingMode {
-            return .createCopy
+        return isEditingEnabled ? .createCopy : .disabled
+    }
+
+    fileprivate func saveModifiedFile(override: Bool) {
+        guard let metadata = self.metadata else { return }
+        let session = NCSession.shared.getSession(account: metadata.account)
+        if !uploadMetadata {
+            return self.dismiss(animated: true)
+        }
+        let ocId = NSUUID().uuidString
+        let size = utilityFileSystem.getFileSize(filePath: url.path)
+
+        if !override {
+            let fileName = utilityFileSystem.createFileName(metadata.fileNameView, serverUrl: metadata.serverUrl, account: metadata.account)
+            metadata.fileName = fileName
+            metadata.fileNameView = fileName
+        }
+
+        let fileNamePath = utilityFileSystem.getDirectoryProviderStorageOcId(ocId, fileNameView: metadata.fileNameView)
+        guard utilityFileSystem.copyFile(atPath: url.path, toPath: fileNamePath) else { return }
+
+        let metadataForUpload = NCManageDatabase.shared.createMetadata(fileName: metadata.fileName,
+                                                                       fileNameView: metadata.fileNameView,
+                                                                       ocId: ocId,
+                                                                       serverUrl: metadata.serverUrl,
+                                                                       url: url.path,
+                                                                       contentType: "",
+                                                                       session: session,
+                                                                       sceneIdentifier: nil)
+
+        metadataForUpload.session = NCNetworking.shared.sessionUploadBackground
+        if override {
+            metadataForUpload.sessionSelector = NCGlobal.shared.selectorUploadFileNODelete
         } else {
-            return .disabled
+            metadataForUpload.sessionSelector = NCGlobal.shared.selectorUploadFile
+        }
+        metadataForUpload.size = size
+        metadataForUpload.status = NCGlobal.shared.metadataStatusWaitUpload
+        metadataForUpload.sessionDate = Date()
+
+        NCNetworkingProcess.shared.createProcessUploads(metadatas: [metadataForUpload]) { _ in
+            self.dismiss(animated: true)
         }
     }
-    
+
     func previewController(_ controller: QLPreviewController, didSaveEditedCopyOf previewItem: QLPreviewItem, at modifiedContentsURL: URL) {
-        
-        if saveMode != .discard {
-                
-            guard let metadata = self.metadata else { return }
-            let ocId = NSUUID().uuidString
-            let size = NCUtilityFileSystem.shared.getFileSize(filePath: modifiedContentsURL.path)
-            
-            if saveMode == .copy {
-                let fileName = NCUtilityFileSystem.shared.createFileName(metadata.fileNameView, serverUrl: metadata.serverUrl, account: metadata.account)
-                metadata.fileName = fileName
-                metadata.fileNameView = fileName
-            } 
-            
-            let fileNamePath = CCUtility.getDirectoryProviderStorageOcId(ocId, fileNameView: metadata.fileNameView)!
-            
-            if NCUtilityFileSystem.shared.copyFile(atPath: modifiedContentsURL.path, toPath: fileNamePath) {
-            
-                let metadataForUpload = NCManageDatabase.shared.createMetadata(account: metadata.account, user: metadata.user, userId: metadata.userId, fileName: metadata.fileName, fileNameView: metadata.fileNameView, ocId: ocId, serverUrl: metadata.serverUrl, urlBase: metadata.urlBase, url: modifiedContentsURL.path, contentType: "", livePhoto: false)
-                                                                               
-                metadataForUpload.session = NCNetworking.shared.sessionIdentifierBackground
-                metadataForUpload.sessionSelector = NCGlobal.shared.selectorUploadFile
-                metadataForUpload.size = size
-                metadataForUpload.status = NCGlobal.shared.metadataStatusWaitUpload
-                
-                appDelegate.networkingProcessUpload?.createProcessUploads(metadatas: [metadataForUpload])
-            }
+        // easier to handle that way than to use `.updateContents`
+        // needs to be moved otherwise it will only be called once!
+        guard utilityFileSystem.moveFile(atPath: modifiedContentsURL.path, toPath: url.path) else { return }
+        hasChangesQuickLook = true
+    }
+}
+
+extension NCViewerQuickLook: CropViewControllerDelegate {
+    func cropViewControllerDidCrop(_ cropViewController: Mantis.CropViewController, cropped: UIImage, transformation: Mantis.Transformation, cropInfo: Mantis.CropInfo) {
+        cropViewController.dismiss(animated: true)
+        guard let data = cropped.jpegData(compressionQuality: 0.9) else { return }
+        do {
+            try data.write(to: self.url)
+            hasChangesQuickLook = true
+            reloadData()
+        } catch {
+            print(error)
         }
+    }
+
+    func cropViewControllerDidCancel(_ cropViewController: Mantis.CropViewController, original: UIImage) {
+        cropViewController.dismiss(animated: true)
     }
 }
 
 class PreviewItem: NSObject, QLPreviewItem {
     var previewItemURL: URL?
+}
+
+class CropToolbarIcon: CropToolbarIconProvider {
+    func getCropIcon() -> UIImage? {
+        return NCUtility().loadImage(named: "checkmark.circle")
+    }
+
+    func getCancelIcon() -> UIImage? {
+        return NCUtility().loadImage(named: "xmark.circle")
+    }
 }

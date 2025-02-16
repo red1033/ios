@@ -22,12 +22,13 @@
 //
 
 import Foundation
-import SVGKit
-import NCCommunication
 import UIKit
+import MessageUI
+import SVGKit
+import NextcloudKit
 
 extension UIViewController {
-    fileprivate func handleProfileAction(_ action: NCHovercard.Action, for userId: String) {
+    fileprivate func handleProfileAction(_ action: NKHovercard.Action, for userId: String, session: NCSession.Session) {
         switch action.appId {
         case "email":
             guard
@@ -35,56 +36,51 @@ extension UIViewController {
                 url.scheme == "mailto",
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
             else {
-                NCContentPresenter.shared.showGenericError(description: "_cannot_send_mail_error_")
+                let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_cannot_send_mail_error_")
+                NCContentPresenter().showError(error: error)
                 return
             }
             sendEmail(to: components.path)
 
         case "spreed":
             guard
-                let appDelegate = UIApplication.shared.delegate as? AppDelegate,
-                let talkUrl = URL(string: "nextcloudtalk://open-conversation?server=\(appDelegate.urlBase)&user=\(appDelegate.userId)&withUser=\(userId)"),
+                let talkUrl = URL(string: "nextcloudtalk://open-conversation?server=\(session.urlBase)&user=\(session.userId)&withUser=\(userId)"),
                 UIApplication.shared.canOpenURL(talkUrl)
             else { fallthrough /* default: open web link in browser */ }
             UIApplication.shared.open(talkUrl)
 
         default:
             guard let url = action.hyperlinkUrl, UIApplication.shared.canOpenURL(url) else {
-                NCContentPresenter.shared.showGenericError(description: "_open_url_error_")
+                let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_open_url_error_")
+                NCContentPresenter().showError(error: error)
                 return
             }
             UIApplication.shared.open(url, options: [:])
         }
     }
 
-    func showProfileMenu(userId: String) {
+    func showProfileMenu(userId: String, session: NCSession.Session) {
+        guard NCCapabilities.shared.getCapabilities(account: session.account).capabilityServerVersionMajor >= NCGlobal.shared.nextcloudVersion23 else { return }
 
-        guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
-        let serverVersionMajor = NCManageDatabase.shared.getCapabilitiesServerInt(account: appDelegate.account, elements: NCElementsJSON.shared.capabilitiesVersionMajor)
-        guard serverVersionMajor >= NCGlobal.shared.nextcloudVersion23 else { return }
-
-        NCCommunication.shared.getHovercard(for: userId) { (card, errCode, err) in
-            guard let card = card else { return }
+        NextcloudKit.shared.getHovercard(for: userId, account: session.account) { account, card, _, _ in
+            guard let card = card, account == session.account else { return }
 
             let personHeader = NCMenuAction(
                 title: card.displayName,
-                icon: NCUtility.shared.loadUserImage(
-                    for: userId,
-                       displayName: card.displayName,
-                       userBaseUrl: appDelegate),
+                icon: NCUtility().loadUserImage(for: userId, displayName: card.displayName, urlBase: session.urlBase),
                 action: nil)
 
             let actions = card.actions.map { action -> NCMenuAction in
-                var image = NCUtility.shared.loadImage(named: "user", color: NCBrandColor.shared.label)
+                var image = NCUtility().loadImage(named: "user", colors: [NCBrandColor.shared.iconImageColor])
                 if let url = URL(string: action.icon),
                    let svgSource = SVGKSourceURL.source(from: url),
                    let svg = SVGKImage(source: svgSource) {
-                    image = svg.uiImage.imageColor(NCBrandColor.shared.label)
+                    image = svg.uiImage.withTintColor(NCBrandColor.shared.iconImageColor, renderingMode: .alwaysOriginal)
                 }
                 return NCMenuAction(
                     title: action.title,
                     icon: image,
-                    action: { _ in self.handleProfileAction(action, for: userId) })
+                    action: { _ in self.handleProfileAction(action, for: userId, session: session) })
             }
 
             let allActions = [personHeader] + actions
@@ -94,7 +90,8 @@ extension UIViewController {
 
     func sendEmail(to email: String) {
         guard MFMailComposeViewController.canSendMail() else {
-            NCContentPresenter.shared.showGenericError(description: "_cannot_send_mail_error_")
+            let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_cannot_send_mail_error_")
+            NCContentPresenter().showError(error: error)
             return
         }
 
@@ -104,9 +101,15 @@ extension UIViewController {
 
         present(mail, animated: true)
     }
-    
-    func presentMenu(with actions: [NCMenuAction]) {
-        let menuViewController = NCMenu.makeNCMenu(with: actions)
+
+    func presentMenu(with actions: [NCMenuAction], menuColor: UIColor = .systemBackground, textColor: UIColor = NCBrandColor.shared.textColor) {
+        guard !actions.isEmpty else { return }
+        let actions = actions.sorted(by: { $0.order < $1.order })
+        guard let menuViewController = NCMenu.makeNCMenu(with: actions, menuColor: menuColor, textColor: textColor) else {
+            let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_internal_generic_error_")
+            NCContentPresenter().showError(error: error)
+            return
+        }
 
         let menuPanelController = NCMenuPanelController()
         menuPanelController.parentPresenter = self
@@ -118,7 +121,7 @@ extension UIViewController {
     }
 }
 
-extension UIViewController: MFMailComposeViewControllerDelegate {
+extension UIViewController: @retroactive MFMailComposeViewControllerDelegate {
     public func mailComposeController(_ controller: MFMailComposeViewController, didFinishWith result: MFMailComposeResult, error: Error?) {
         controller.dismiss(animated: true)
     }

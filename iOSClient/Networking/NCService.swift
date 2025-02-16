@@ -22,266 +22,366 @@
 //
 
 import UIKit
-import SVGKit
-import NCCommunication
+import NextcloudKit
+import RealmSwift
 
 class NCService: NSObject {
-    @objc static let shared: NCService = {
-        let instance = NCService()
-        return instance
-    }()
-    
-    let appDelegate = UIApplication.shared.delegate as! AppDelegate
-    
-    //MARK: -
-    
-    @objc public func startRequestServicesServer() {
-   
-        NCManageDatabase.shared.clearAllAvatarLoaded()
-        
-        if appDelegate.account == "" { return }
-        
-        self.addInternalTypeIdentifier()
-        self.requestUserProfile()
-        self.requestServerStatus()
+    let utilityFileSystem = NCUtilityFileSystem()
+    let utility = NCUtility()
+    let database = NCManageDatabase.shared
+
+    // MARK: -
+
+    public func startRequestServicesServer(account: String, controller: NCMainTabBarController?) {
+        guard !account.isEmpty, UIApplication.shared.applicationState == .active else { return }
+
+        Task(priority: .background) {
+            self.database.clearAllAvatarLoaded()
+            NCPushNotification.shared.pushNotification()
+            addInternalTypeIdentifier(account: account)
+
+            let result = await requestServerStatus(account: account, controller: controller)
+            if result {
+                requestServerCapabilities(account: account, controller: controller)
+                getAvatar(account: account)
+                NCNetworkingE2EE().unlockAll(account: account)
+                sendClientDiagnosticsRemoteOperation(account: account)
+                synchronize(account: account)
+            }
+        }
     }
 
-    //MARK: -
-    
-    func addInternalTypeIdentifier() {
+    // MARK: -
+
+    func addInternalTypeIdentifier(account: String) {
+        NextcloudKit.shared.nkCommonInstance.clearInternalTypeIdentifier(account: account)
 
         // txt
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "text/plain", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "markdown")
-        
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "text/plain", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NKCommon.TypeIconFile.document.rawValue, name: "markdown", account: account)
+
         // html
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "text/html", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "markdown")
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "text/html", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NKCommon.TypeIconFile.document.rawValue, name: "markdown", account: account)
 
         // markdown
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "net.daringfireball.markdown", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "markdown")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "text/x-markdown", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "markdown")
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "net.daringfireball.markdown", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NKCommon.TypeIconFile.document.rawValue, name: "markdown", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "text/x-markdown", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorText, iconName: NKCommon.TypeIconFile.document.rawValue, name: "markdown", account: account)
 
         // document: text
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "org.oasis-open.opendocument.text", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "document")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "org.openxmlformats.wordprocessingml.document", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorOnlyoffice ,iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "document")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "com.microsoft.word.doc", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "document")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "com.apple.iwork.pages.pages", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "pages")
-        
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "org.oasis-open.opendocument.text", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NKCommon.TypeIconFile.document.rawValue, name: "document", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "org.openxmlformats.wordprocessingml.document", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorOnlyoffice, iconName: NKCommon.TypeIconFile.document.rawValue, name: "document", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "com.microsoft.word.doc", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NKCommon.TypeIconFile.document.rawValue, name: "document", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "com.apple.iwork.pages.pages", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NKCommon.TypeIconFile.document.rawValue, name: "pages", account: account)
+
         // document: sheet
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "org.oasis-open.opendocument.spreadsheet", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NCCommunicationCommon.typeIconFile.xls.rawValue, name: "sheet")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "org.openxmlformats.spreadsheetml.sheet", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorOnlyoffice, iconName: NCCommunicationCommon.typeIconFile.xls.rawValue, name: "sheet")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "com.microsoft.excel.xls", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NCCommunicationCommon.typeIconFile.xls.rawValue, name: "sheet")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "com.apple.iwork.numbers.numbers", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NCCommunicationCommon.typeIconFile.xls.rawValue, name: "numbers")
-        
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "org.oasis-open.opendocument.spreadsheet", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NKCommon.TypeIconFile.xls.rawValue, name: "sheet", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "org.openxmlformats.spreadsheetml.sheet", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorOnlyoffice, iconName: NKCommon.TypeIconFile.xls.rawValue, name: "sheet", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "com.microsoft.excel.xls", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NKCommon.TypeIconFile.xls.rawValue, name: "sheet", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "com.apple.iwork.numbers.numbers", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NKCommon.TypeIconFile.xls.rawValue, name: "numbers", account: account)
+
         // document: presentation
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "org.oasis-open.opendocument.presentation", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NCCommunicationCommon.typeIconFile.ppt.rawValue, name: "presentation")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "org.openxmlformats.presentationml.presentation", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorOnlyoffice, iconName: NCCommunicationCommon.typeIconFile.ppt.rawValue, name: "presentation")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "com.microsoft.powerpoint.ppt", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NCCommunicationCommon.typeIconFile.ppt.rawValue, name: "presentation")
-        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: "com.apple.iwork.keynote.key", classFile: NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NCCommunicationCommon.typeIconFile.ppt.rawValue, name: "keynote")
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "org.oasis-open.opendocument.presentation", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NKCommon.TypeIconFile.ppt.rawValue, name: "presentation", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "org.openxmlformats.presentationml.presentation", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorOnlyoffice, iconName: NKCommon.TypeIconFile.ppt.rawValue, name: "presentation", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "com.microsoft.powerpoint.ppt", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NKCommon.TypeIconFile.ppt.rawValue, name: "presentation", account: account)
+        NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: "com.apple.iwork.keynote.key", classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorQuickLook, iconName: NKCommon.TypeIconFile.ppt.rawValue, name: "keynote", account: account)
     }
-    
-    private func requestUserProfile() {
-        
-        if appDelegate.account == "" { return }
-        
-        NCCommunication.shared.getUserProfile(queue: NCCommunicationCommon.shared.backgroundQueue) { (account, userProfile, errorCode, errorDescription) in
-               
-            if errorCode == 0 && account == self.appDelegate.account {
-                  
-                // Update User (+ userProfile.id) & active account & account network
-                guard let tableAccount = NCManageDatabase.shared.setAccountUserProfile(userProfile!) else {
-                    NCContentPresenter.shared.messageNotification("Account", description: "Internal error : account not found on DB",  delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: NCGlobal.shared.errorInternalError, priority: .max)
-                    return
+
+    // MARK: -
+
+    private func requestServerStatus(account: String, controller: NCMainTabBarController?) async -> Bool {
+        let serverUrl = NCSession.shared.getSession(account: account).urlBase
+        switch await NCNetworking.shared.getServerStatus(serverUrl: serverUrl, options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) {
+        case .success(let serverInfo):
+            if serverInfo.maintenance {
+                return false
+            } else if serverInfo.productName.lowercased().contains("owncloud") {
+                let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_warning_owncloud_")
+                NCContentPresenter().showWarning(error: error, priority: .max)
+                return false
+            } else if serverInfo.versionMajor <= NCGlobal.shared.nextcloud_unsupported_version {
+                let error = NKError(errorCode: NCGlobal.shared.errorInternalError, errorDescription: "_warning_unsupported_")
+                NCContentPresenter().showWarning(error: error, priority: .max)
+            }
+        case .failure:
+            return false
+        }
+
+        let resultUserProfile = await NCNetworking.shared.getUserProfile(account: account, options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue))
+        if resultUserProfile.error == .success, let userProfile = resultUserProfile.userProfile {
+            self.database.setAccountUserProfile(account: resultUserProfile.account, userProfile: userProfile)
+            return true
+        } else if resultUserProfile.error.errorCode == NCGlobal.shared.errorUnauthorized401 || resultUserProfile.error.errorCode == NCGlobal.shared.errorUnauthorized997 {
+            /// Ops the server has Unauthorized, cancel allTask and go to in CheckRemoteUser
+            NCNetworking.shared.cancelAllTask()
+            ///
+            DispatchQueue.main.async {
+                if UIApplication.shared.applicationState == .active && NCNetworking.shared.isOnline {
+                    NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] The server has response with Unauthorized go checkRemoteUser \(resultUserProfile.error.errorCode)")
+                    NCNetworkingCheckRemoteUser().checkRemoteUser(account: resultUserProfile.account, controller: controller, error: resultUserProfile.error)
                 }
+            }
+            return false
+        } else {
+            NCContentPresenter().showError(error: resultUserProfile.error, priority: .max)
+            return false
+        }
+    }
 
-                self.appDelegate.settingAccount(tableAccount.account, urlBase: tableAccount.urlBase, user: tableAccount.user, userId: tableAccount.userId, password: CCUtility.getPassword(tableAccount.account))
+    func synchronize(account: String) {
+        NextcloudKit.shared.listingFavorites(showHiddenFiles: NCKeychain().showHiddenFiles,
+                                             account: account,
+                                             options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) { account, files, _, error in
+            guard error == .success, let files else { return }
+            self.database.convertFilesToMetadatas(files, useFirstAsMetadataFolder: false) { _, metadatas in
+                self.database.updateMetadatasFavorite(account: account, metadatas: metadatas)
+            }
+            NextcloudKit.shared.nkCommonInstance.writeLog("[INFO] Synchronize Favorite")
+            self.synchronizeOffline(account: account)
+        }
+    }
 
-                // Synchronize favorite
-                NCNetworking.shared.listingFavoritescompletion(selector: NCGlobal.shared.selectorReadFile) { (_, _, _, _) in }
+    func getAvatar(account: String) {
+        let session = NCSession.shared.getSession(account: account)
+        let fileName = NCSession.shared.getFileName(urlBase: session.urlBase, user: session.user)
+        let etag = self.database.getTableAvatar(fileName: fileName)?.etag
 
-                // Synchronize Offline
-                self.synchronizeOffline(account: tableAccount.account)
+        NextcloudKit.shared.downloadAvatar(user: session.userId,
+                                           fileNameLocalPath: utilityFileSystem.directoryUserData + "/" + fileName,
+                                           sizeImage: NCGlobal.shared.avatarSize,
+                                           avatarSizeRounded: NCGlobal.shared.avatarSizeRounded,
+                                           etag: etag,
+                                           account: account,
+                                           options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) { _, _, _, newEtag, _, error in
+            if let newEtag,
+               etag != newEtag,
+               error == .success {
+                self.database.addAvatar(fileName: fileName, etag: newEtag)
 
-                // Get Avatar
-                let fileName = tableAccount.userBaseUrl + "-" + self.appDelegate.user + ".png"
-                let fileNameLocalPath = String(CCUtility.getDirectoryUserData()) + "/" + fileName
-                let etag = NCManageDatabase.shared.getTableAvatar(fileName: fileName)?.etag
+                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterReloadAvatar, userInfo: ["error": error])
+            } else if error.errorCode == NCGlobal.shared.errorNotModified {
+                self.database.setAvatarLoaded(fileName: fileName)
+            }
+        }
+    }
 
-                NCCommunication.shared.downloadAvatar(user: tableAccount.userId, fileNameLocalPath: fileNameLocalPath, sizeImage: NCGlobal.shared.avatarSize, avatarSizeRounded: NCGlobal.shared.avatarSizeRounded, etag: etag, queue: NCCommunicationCommon.shared.backgroundQueue) { (account, image, imageOriginal, etag, errorCode, errorMessage) in
+    private func requestServerCapabilities(account: String, controller: NCMainTabBarController?) {
+        NextcloudKit.shared.getCapabilities(account: account, options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) { account, presponseData, error in
+            guard error == .success, let data = presponseData?.data else {
+                return
+            }
 
-                    if let etag = etag, errorCode == 0 {
-                        NCManageDatabase.shared.addAvatar(fileName: fileName, etag: etag)
-                        NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterReloadAvatar, userInfo: nil)
-                    } else if errorCode == NCGlobal.shared.errorNotModified {
-                        
-                        NCManageDatabase.shared.setAvatarLoaded(fileName: fileName)
-                    }
+            data.printJson()
+
+            self.database.addCapabilitiesJSon(data, account: account)
+
+            guard let capability = self.database.setCapabilities(account: account, data: data) else {
+                return
+            }
+
+            // Recommendations
+            if NCCapabilities.shared.getCapabilities(account: account).capabilityRecommendations {
+                Task.detached {
+                    let session = NCSession.shared.getSession(account: account)
+                    await NCNetworking.shared.createRecommendations(session: session)
                 }
-                self.requestServerCapabilities()
-                
             } else {
-                
-                if errorCode == 401 || errorCode == 403 {
-                    NCNetworkingCheckRemoteUser.shared.checkRemoteUser(account: account, errorCode: errorCode, errorDescription: errorDescription)
+                self.database.deleteAllRecommendedFiles(account: account)
+                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterReloadHeader, userInfo: ["account": account])
+            }
+
+            // Theming
+            if NCBrandColor.shared.settingThemingColor(account: account) {
+                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterChangeTheming, userInfo: ["account": account])
+            }
+
+            // Text direct editor detail
+            if capability.capabilityServerVersionMajor >= NCGlobal.shared.nextcloudVersion18 {
+                let options = NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)
+                NextcloudKit.shared.NCTextObtainEditorDetails(account: account, options: options) { account, editors, creators, _, error in
+                    if error == .success {
+                        self.database.addDirectEditing(account: account, editors: editors, creators: creators)
+                    }
                 }
             }
-        }
-    }
-    
-    private func requestServerStatus() {
-        
-        NCCommunication.shared.getServerStatus(serverUrl: appDelegate.urlBase, queue: NCCommunicationCommon.shared.backgroundQueue) { (serverProductName, serverVersion, versionMajor, versionMinor, versionMicro, extendedSupport, errorCode, errorMessage) in
-                        
-            if errorCode == 0 && extendedSupport == false {
-                                
-                if serverProductName == "owncloud" {
-                    NCContentPresenter.shared.messageNotification("_warning_", description: "_warning_owncloud_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.info, errorCode: NCGlobal.shared.errorInternalError, priority: .max)
-                } else if versionMajor <=  NCGlobal.shared.nextcloud_unsupported_version {
-                    NCContentPresenter.shared.messageNotification("_warning_", description: "_warning_unsupported_", delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.info, errorCode: NCGlobal.shared.errorInternalError, priority: .max)
-                }
-            }
-        }
-    }
-    
-    private func requestServerCapabilities() {
-        
-        if appDelegate.account == "" { return }
-        
-        NCCommunication.shared.getCapabilities(queue: NCCommunicationCommon.shared.backgroundQueue) { (account, data, errorCode, errorDescription) in
-            
-            if errorCode == 0 && data != nil {
-                
-                NCManageDatabase.shared.addCapabilitiesJSon(data!, account: account)
-            
-                let serverVersionMajor = NCManageDatabase.shared.getCapabilitiesServerInt(account: account, elements: NCElementsJSON.shared.capabilitiesVersionMajor)
-                
-                // Setup communication
-                if serverVersionMajor > 0 {
-                    NCCommunicationCommon.shared.setup(nextcloudVersion: serverVersionMajor)
-                }
-                NCCommunicationCommon.shared.setup(webDav: NCUtilityFileSystem.shared.getWebDAV(account: account))
-                
-                // Theming
-                NCBrandColor.shared.settingThemingColor(account: account)
-            
-                // File Sharing
-                let isFilesSharingEnabled = NCManageDatabase.shared.getCapabilitiesServerBool(account: account, elements: NCElementsJSON.shared.capabilitiesFileSharingApiEnabled, exists: false)
-                if isFilesSharingEnabled {
-                    NCCommunication.shared.readShares(parameters: NCCShareParameter(), queue: NCCommunicationCommon.shared.backgroundQueue) { (account, shares, errorCode, ErrorDescription) in
-                        if errorCode == 0 {
-                            NCManageDatabase.shared.deleteTableShare(account: account)
-                            if shares != nil {
-                                NCManageDatabase.shared.addShare(urlBase: self.appDelegate.urlBase, account: account, shares: shares!)
-                            }
-                            self.appDelegate.shares = NCManageDatabase.shared.getTableShares(account: account)
-                        } else {
-                            NCContentPresenter.shared.messageNotification("_share_", description: ErrorDescription, delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: errorCode)
-                        }
-                    }
-                }
-                
-                let comments = NCManageDatabase.shared.getCapabilitiesServerBool(account: account, elements: NCElementsJSON.shared.capabilitiesFilesComments, exists: false)
-                let activity = NCManageDatabase.shared.getCapabilitiesServerArray(account: account, elements: NCElementsJSON.shared.capabilitiesActivity)
-                
-                if !isFilesSharingEnabled && !comments && activity == nil {
-                    self.appDelegate.disableSharesView = true
-                } else {
-                    self.appDelegate.disableSharesView = false
-                }
-            
-                // Text direct editor detail
-                if serverVersionMajor >= NCGlobal.shared.nextcloudVersion18 {
-                    NCCommunication.shared.NCTextObtainEditorDetails(queue: NCCommunicationCommon.shared.backgroundQueue) { (account, editors, creators, errorCode, errorMessage) in
-                        if errorCode == 0 && account == self.appDelegate.account {
-                            NCManageDatabase.shared.addDirectEditing(account: account, editors: editors, creators: creators)
-                        }
-                    }
-                }
-                
-                // External file Server
-                let isExternalSitesServerEnabled = NCManageDatabase.shared.getCapabilitiesServerBool(account: account, elements: NCElementsJSON.shared.capabilitiesExternalSitesExists, exists: true)
-                if (isExternalSitesServerEnabled) {
-                    NCCommunication.shared.getExternalSite(queue: NCCommunicationCommon.shared.backgroundQueue) { (account, externalSites, errorCode, errorDescription) in
-                        if errorCode == 0 && account == self.appDelegate.account {
-                            NCManageDatabase.shared.deleteExternalSites(account: account)
-                            for externalSite in externalSites {
-                                NCManageDatabase.shared.addExternalSites(externalSite, account: account)
-                            }
-                        }
-                    }
-                    
-                } else {
-                    NCManageDatabase.shared.deleteExternalSites(account: account)
-                }
-                
-                // User Status
-                let userStatus = NCManageDatabase.shared.getCapabilitiesServerBool(account: account, elements: NCElementsJSON.shared.capabilitiesUserStatusEnabled, exists: false)
-                if userStatus {
-                    NCCommunication.shared.getUserStatus(queue: NCCommunicationCommon.shared.backgroundQueue) { (account, clearAt, icon, message, messageId, messageIsPredefined, status, statusIsUserDefined, userId, errorCode, errorDescription) in
-                        if errorCode == 0 && account == self.appDelegate.account && userId == self.appDelegate.userId {
-                            NCManageDatabase.shared.setAccountUserStatus(userStatusClearAt: clearAt, userStatusIcon: icon, userStatusMessage: message, userStatusMessageId: messageId, userStatusMessageIsPredefined: messageIsPredefined, userStatusStatus: status, userStatusStatusIsUserDefined: statusIsUserDefined, account: account)
-                        }
-                    }
-                }
 
-                // Added UTI for Collabora
-                if let richdocumentsMimetypes = NCManageDatabase.shared.getCapabilitiesServerArray(account: account, elements: NCElementsJSON.shared.capabilitiesRichdocumentsMimetypes) {
-                    for mimeType in richdocumentsMimetypes {
-                        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: mimeType, classFile:  NCCommunicationCommon.typeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "document")
+            // External file Server
+            if capability.capabilityExternalSites {
+                NextcloudKit.shared.getExternalSite(account: account, options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) { account, externalSites, _, error in
+                    if error == .success {
+                        self.database.deleteExternalSites(account: account)
+                        for externalSite in externalSites {
+                            self.database.addExternalSites(externalSite, account: account)
+                        }
                     }
                 }
-                
-                // Added UTI for ONLYOFFICE & Text
-                if let directEditingCreators = NCManageDatabase.shared.getDirectEditingCreators(account: account) {
-                    for directEditing in directEditingCreators {
-                        NCCommunicationCommon.shared.addInternalTypeIdentifier(typeIdentifier: directEditing.mimetype, classFile:  NCCommunicationCommon.typeClassFile.document.rawValue, editor: directEditing.editor, iconName: NCCommunicationCommon.typeIconFile.document.rawValue, name: "document")
-                    }
-                }
-
-                //                    Handwerkcloud
-                //                    let isHandwerkcloudEnabled = NCManageDatabase.shared.getCapabilitiesServerBool(account: account, elements: NCElementsJSON.shared.capabilitiesHWCEnabled, exists: false)
-                //                    if (isHandwerkcloudEnabled) {
-                //                        self.requestHC()
-                //                    }
-                
-            } else if errorCode != 0 {
-                
-                NCBrandColor.shared.settingThemingColor(account: account)
-                
-                if errorCode == 401 || errorCode == 403 {
-                    NCNetworkingCheckRemoteUser.shared.checkRemoteUser(account: account, errorCode: errorCode, errorDescription: errorDescription)
-                }
-                
             } else {
-                NCBrandColor.shared.settingThemingColor(account: account)
+                self.database.deleteExternalSites(account: account)
+            }
+
+            // User Status
+            if capability.capabilityUserStatusEnabled {
+                NextcloudKit.shared.getUserStatus(account: account, options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) { account, clearAt, icon, message, messageId, messageIsPredefined, status, statusIsUserDefined, _, _, error in
+                    if error == .success {
+                        self.database.setAccountUserStatus(userStatusClearAt: clearAt, userStatusIcon: icon, userStatusMessage: message, userStatusMessageId: messageId, userStatusMessageIsPredefined: messageIsPredefined, userStatusStatus: status, userStatusStatusIsUserDefined: statusIsUserDefined, account: account)
+                    }
+                }
+            }
+
+            // Notifications
+            controller?.availableNotifications = false
+            if capability.capabilityNotification.count > 0 {
+                NextcloudKit.shared.getNotifications(account: account) { _ in
+                } completion: { _, notifications, _, error in
+                    if error == .success, let notifications = notifications, notifications.count > 0 {
+                        controller?.availableNotifications = true
+                    }
+                }
+            }
+
+            // Added UTI for Collabora
+            capability.capabilityRichDocumentsMimetypes.forEach { mimeType in
+                NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: mimeType, classFile: NKCommon.TypeClassFile.document.rawValue, editor: NCGlobal.shared.editorCollabora, iconName: NKCommon.TypeIconFile.document.rawValue, name: "document", account: account)
+            }
+
+            // Added UTI for ONLYOFFICE & Text
+            if let directEditingCreators = self.database.getDirectEditingCreators(account: account) {
+                for directEditing in directEditingCreators {
+                    NextcloudKit.shared.nkCommonInstance.addInternalTypeIdentifier(typeIdentifier: directEditing.mimetype, classFile: NKCommon.TypeClassFile.document.rawValue, editor: directEditing.editor, iconName: NKCommon.TypeIconFile.document.rawValue, name: "document", account: account)
+                }
             }
         }
     }
-    
+
+    // MARK: -
+
     @objc func synchronizeOffline(account: String) {
-        
-        // Synchronize Offline Directory
-        if let directories = NCManageDatabase.shared.getTablesDirectory(predicate: NSPredicate(format: "account == %@ AND offline == true", account), sorted: "serverUrl", ascending: true) {
-            for directory: tableDirectory in directories {
-                guard let metadata = NCManageDatabase.shared.getMetadataFromOcId(directory.ocId) else {
-                    continue
+        // Synchronize Directory
+        Task {
+            if let directories = self.database.getTablesDirectory(predicate: NSPredicate(format: "account == %@ AND offline == true", account), sorted: "serverUrl", ascending: true) {
+                for directory: tableDirectory in directories {
+                    await NCNetworking.shared.synchronization(account: account, serverUrl: directory.serverUrl, add: false)
                 }
-                NCOperationQueue.shared.synchronizationMetadata(metadata, selector: NCGlobal.shared.selectorDownloadFile)
             }
         }
-    
-        // Synchronize Offline Files
-        let files = NCManageDatabase.shared.getTableLocalFiles(predicate: NSPredicate(format: "account == %@ AND offline == true", account), sorted: "fileName", ascending: true)
+
+        // Synchronize Files
+        let files = self.database.getTableLocalFiles(predicate: NSPredicate(format: "account == %@ AND offline == true", account), sorted: "fileName", ascending: true)
         for file: tableLocalFile in files {
-            guard let metadata = NCManageDatabase.shared.getMetadataFromOcId(file.ocId) else {
-                continue
+            guard let metadata = self.database.getMetadataFromOcId(file.ocId) else { continue }
+            if NCNetworking.shared.isSynchronizable(ocId: metadata.ocId, fileName: metadata.fileName, etag: metadata.etag) {
+                self.database.setMetadatasSessionInWaitDownload(metadatas: [metadata],
+                                                                session: NCNetworking.shared.sessionDownloadBackground,
+                                                                selector: NCGlobal.shared.selectorSynchronizationOffline)
             }
-            NCOperationQueue.shared.synchronizationMetadata(metadata, selector: NCGlobal.shared.selectorDownloadFile)
         }
     }
-    
-    //MARK: - Thirt Part
-    
-    private func requestHC() {
 
+    // MARK: -
+
+    func sendClientDiagnosticsRemoteOperation(account: String) {
+        guard NCCapabilities.shared.getCapabilities(account: account).capabilitySecurityGuardDiagnostics,
+              self.database.existsDiagnostics(account: account) else {
+            return
+        }
+
+        struct Issues: Codable {
+            struct SyncConflicts: Codable {
+                var count: Int?
+                var oldest: TimeInterval?
+            }
+
+            struct VirusDetected: Codable {
+                var count: Int?
+                var oldest: TimeInterval?
+            }
+
+            struct E2EError: Codable {
+                var count: Int?
+                var oldest: TimeInterval?
+            }
+
+            struct Problem: Codable {
+                struct Error: Codable {
+                    var count: Int
+                    var oldest: TimeInterval
+                }
+
+                var forbidden: Error?               // NCGlobal.shared.diagnosticProblemsForbidden
+                var badResponse: Error?             // NCGlobal.shared.diagnosticProblemsBadResponse
+                var uploadServerError: Error?       // NCGlobal.shared.diagnosticProblemsUploadServerError
+            }
+
+            var syncConflicts: SyncConflicts
+            var virusDetected: VirusDetected
+            var e2eeErrors: E2EError
+            var problems: Problem?
+
+            enum CodingKeys: String, CodingKey {
+                case syncConflicts = "sync_conflicts"
+                case virusDetected = "virus_detected"
+                case e2eeErrors = "e2ee_errors"
+                case problems
+            }
+        }
+
+        var ids: [ObjectId] = []
+
+        var syncConflicts: Issues.SyncConflicts = Issues.SyncConflicts()
+        var virusDetected: Issues.VirusDetected = Issues.VirusDetected()
+        var e2eeErrors: Issues.E2EError = Issues.E2EError()
+
+        var problems: Issues.Problem? = Issues.Problem()
+        var problemForbidden: Issues.Problem.Error?
+        var problemBadResponse: Issues.Problem.Error?
+        var problemUploadServerError: Issues.Problem.Error?
+
+        if let result = self.database.getDiagnostics(account: account, issue: NCGlobal.shared.diagnosticIssueSyncConflicts)?.first {
+            syncConflicts = Issues.SyncConflicts(count: result.counter, oldest: result.oldest)
+            ids.append(result.id)
+        }
+        if let result = self.database.getDiagnostics(account: account, issue: NCGlobal.shared.diagnosticIssueVirusDetected)?.first {
+            virusDetected = Issues.VirusDetected(count: result.counter, oldest: result.oldest)
+            ids.append(result.id)
+        }
+        if let result = self.database.getDiagnostics(account: account, issue: NCGlobal.shared.diagnosticIssueE2eeErrors)?.first {
+            e2eeErrors = Issues.E2EError(count: result.counter, oldest: result.oldest)
+            ids.append(result.id)
+        }
+        if let results = self.database.getDiagnostics(account: account, issue: NCGlobal.shared.diagnosticIssueProblems) {
+            for result in results {
+                switch result.error {
+                case NCGlobal.shared.diagnosticProblemsForbidden:
+                    if result.counter >= 1 {
+                        problemForbidden = Issues.Problem.Error(count: result.counter, oldest: result.oldest)
+                        ids.append(result.id)
+                    }
+                case NCGlobal.shared.diagnosticProblemsBadResponse:
+                    if result.counter >= 2 {
+                        problemBadResponse = Issues.Problem.Error(count: result.counter, oldest: result.oldest)
+                        ids.append(result.id)
+                    }
+                case NCGlobal.shared.diagnosticProblemsUploadServerError:
+                    if result.counter >= 1 {
+                        problemUploadServerError = Issues.Problem.Error(count: result.counter, oldest: result.oldest)
+                        ids.append(result.id)
+                    }
+                default:
+                    break
+                }
+            }
+            problems = Issues.Problem(forbidden: problemForbidden, badResponse: problemBadResponse, uploadServerError: problemUploadServerError)
+        }
+
+        do {
+            let issues = Issues(syncConflicts: syncConflicts, virusDetected: virusDetected, e2eeErrors: e2eeErrors, problems: problems)
+            let data = try JSONEncoder().encode(issues)
+            data.printJson()
+            NextcloudKit.shared.sendClientDiagnosticsRemoteOperation(data: data, account: account, options: NKRequestOptions(queue: NextcloudKit.shared.nkCommonInstance.backgroundQueue)) { _, _, error in
+                if error == .success {
+                    self.database.deleteDiagnostics(account: account, ids: ids)
+                }
+            }
+        } catch {
+            print("Error: \(error.localizedDescription)")
+        }
     }
 }

@@ -22,513 +22,505 @@
 //
 
 import Foundation
-import NCCommunication
+import NextcloudKit
 import CoreMedia
 import UIKit
 import AVKit
 import MediaPlayer
+import MobileVLCKit
+import FloatingPanel
+import Alamofire
 
 class NCPlayerToolBar: UIView {
-    
-    @IBOutlet weak var playerTopToolBarView: UIView!
-    @IBOutlet weak var pipButton: UIButton!
-    @IBOutlet weak var muteButton: UIButton!
+
+    @IBOutlet weak var utilityView: UIView!
+    @IBOutlet weak var fullscreenButton: UIButton!
+    @IBOutlet weak var subtitleButton: UIButton!
+    @IBOutlet weak var audioButton: UIButton!
+
+    @IBOutlet weak var playerButtonView: UIStackView!
+    @IBOutlet weak var backButton: UIButton!
     @IBOutlet weak var playButton: UIButton!
     @IBOutlet weak var forwardButton: UIButton!
-    @IBOutlet weak var backButton: UIButton!
-    @IBOutlet weak var playbackSlider: UISlider!
+
+    @IBOutlet weak var playbackSliderView: UIView!
+    @IBOutlet weak var playbackSlider: NCPlayerToolBarSlider!
     @IBOutlet weak var labelLeftTime: UILabel!
     @IBOutlet weak var labelCurrentTime: UILabel!
-    
+    @IBOutlet weak var repeatButton: UIButton!
+
     enum sliderEventType {
         case began
         case ended
         case moved
     }
-        
-    private let appDelegate = UIApplication.shared.delegate as! AppDelegate
+    var playbackSliderEvent: sliderEventType = .ended
+    var isFullscreen: Bool = false
+    var playRepeat: Bool = false
+
+    private let hud = NCHud()
     private var ncplayer: NCPlayer?
     private var metadata: tableMetadata?
-    private var wasInPlay: Bool = false
-    private var playbackSliderEvent: sliderEventType = .ended
-    private var timerAutoHide: Timer?
-    
-    var pictureInPictureController: AVPictureInPictureController?
-    weak var viewerMediaPage: NCViewerMediaPage?
+    private let audioSession = AVAudioSession.sharedInstance()
+    private var pointSize: CGFloat = 0
+    private let utilityFileSystem = NCUtilityFileSystem()
+    private let utility = NCUtility()
+    private let database = NCManageDatabase.shared
+    private weak var viewerMediaPage: NCViewerMediaPage?
+    private var buttonImage = UIImage()
 
     // MARK: - View Life Cycle
 
     override func awakeFromNib() {
         super.awakeFromNib()
-        
-        // for disable gesture of UIPageViewController
-        let panRecognizer = UIPanGestureRecognizer(target: self, action: nil)
-        addGestureRecognizer(panRecognizer)
-        let singleTapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(didSingleTapWith(gestureRecognizer:)))
-        addGestureRecognizer(singleTapGestureRecognizer)
-        
-        self.layer.cornerRadius = 15
-        self.layer.masksToBounds = true
-        
-        let blurEffectView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-        blurEffectView.frame = self.bounds
-        blurEffectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.insertSubview(blurEffectView, at:0)
-        
-        playerTopToolBarView.layer.cornerRadius = 10
-        playerTopToolBarView.layer.masksToBounds = true
-        
-        let blurEffectTopToolBarView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-        blurEffectTopToolBarView.frame = playerTopToolBarView.bounds
-        blurEffectTopToolBarView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        playerTopToolBarView.insertSubview(blurEffectTopToolBarView, at:0)
-        
-        pipButton.setImage(NCUtility.shared.loadImage(named: "pip.enter", color: .lightGray), for: .normal)
-        pipButton.isEnabled = false
-        
-        muteButton.setImage(NCUtility.shared.loadImage(named: "audioOff", color: .lightGray), for: .normal)
-        muteButton.isEnabled = false
-        
+
+        self.backgroundColor = UIColor.black.withAlphaComponent(0.1)
+
+        fullscreenButton.setImage(utility.loadImage(named: "arrow.up.left.and.arrow.down.right", colors: [.white]), for: .normal)
+
+        subtitleButton.setImage(utility.loadImage(named: "captions.bubble", colors: [.white]), for: .normal)
+        subtitleButton.isEnabled = false
+
+        audioButton.setImage(utility.loadImage(named: "speaker.zzz", colors: [.white]), for: .normal)
+        audioButton.isEnabled = false
+
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            pointSize = 60
+        } else {
+            pointSize = 50
+        }
+
+        playerButtonView.spacing = pointSize
+        playerButtonView.isHidden = true
+
+        buttonImage = UIImage(systemName: "gobackward.10", withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize))!.withTintColor(.white, renderingMode: .alwaysOriginal)
+        backButton.setImage(buttonImage, for: .normal)
+
+        buttonImage = UIImage(systemName: "play.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize))!.withTintColor(.white, renderingMode: .alwaysOriginal)
+        playButton.setImage(buttonImage, for: .normal)
+
+        buttonImage = UIImage(systemName: "goforward.10", withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize))!.withTintColor(.white, renderingMode: .alwaysOriginal)
+        forwardButton.setImage(buttonImage, for: .normal)
+
+        playbackSlider.addTapGesture()
+        playbackSlider.setThumbImage(UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15)), for: .normal)
         playbackSlider.value = 0
-        playbackSlider.minimumValue = 0
-        playbackSlider.maximumValue = 0
-        playbackSlider.isContinuous = true
-        playbackSlider.tintColor = .lightGray
-        playbackSlider.isEnabled = false
-        
-        labelCurrentTime.text = NCUtility.shared.stringFromTime(.zero)
-        labelCurrentTime.textColor = .lightGray
-        labelLeftTime.text = NCUtility.shared.stringFromTime(.zero)
-        labelLeftTime.textColor = .lightGray
-        
-        backButton.isEnabled = false
-        playButton.setImage(NCUtility.shared.loadImage(named: "play.fill", color: .lightGray), for: .normal)
-        playButton.isEnabled = false
-        forwardButton.isEnabled = false
-        
-        NotificationCenter.default.addObserver(self, selector: #selector(handleInterruption), name: AVAudioSession.interruptionNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange), name: AVAudioSession.routeChangeNotification, object: nil)
+        playbackSlider.tintColor = .white
+        playbackSlider.addTarget(self, action: #selector(playbackValChanged(slider:event:)), for: .valueChanged)
+        repeatButton.setImage(utility.loadImage(named: "repeat", colors: [NCBrandColor.shared.iconImageColor2]), for: .normal)
+
+        utilityView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tap(gestureRecognizer:))))
+        playbackSliderView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tap(gestureRecognizer:))))
+        playbackSliderView.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(tap(gestureRecognizer:))))
+        playerButtonView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tap(gestureRecognizer:))))
+
+        labelCurrentTime.textColor = .white
+        labelLeftTime.textColor = .white
+
+        // Normally hide
+        self.alpha = 0
+        self.isHidden = true
     }
-    
+
     required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
     }
-    
+
     deinit {
         print("deinit NCPlayerToolBar")
-                
-        NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
-        NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
     }
-    
+
     // MARK: -
 
-    func setBarPlayer(ncplayer: NCPlayer, metadata: tableMetadata) {
-                        
-        self.ncplayer = ncplayer
-        self.metadata = metadata
-                        
-        playbackSlider.value = 0
-        playbackSlider.minimumValue = 0
-        playbackSlider.maximumValue = Float(ncplayer.durationTime.seconds)
-        playbackSlider.addTarget(self, action: #selector(onSliderValChanged(slider:event:)), for: .valueChanged)
+    func setBarPlayer(position: Float, ncplayer: NCPlayer? = nil, metadata: tableMetadata? = nil, viewerMediaPage: NCViewerMediaPage? = nil) {
+        if let ncplayer = ncplayer {
+            self.ncplayer = ncplayer
+        }
+        if let metadata = metadata {
+            self.metadata = metadata
+        }
+        if let viewerMediaPage = viewerMediaPage {
+            self.viewerMediaPage = viewerMediaPage
+        }
 
-        labelCurrentTime.text = NCUtility.shared.stringFromTime(.zero)
-        labelLeftTime.text = "-" + NCUtility.shared.stringFromTime(ncplayer.durationTime)
-        
-        updateToolBar()
+        playerButtonView.isHidden = true
+
+        buttonImage = UIImage(systemName: "play.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize))!.withTintColor(.white, renderingMode: .alwaysOriginal)
+        playButton.setImage(buttonImage, for: .normal)
+
+        playbackSlider.value = position
+
+        labelCurrentTime.text = "--:--"
+        labelLeftTime.text = "--:--"
+
+        if viewerMediaScreenMode == .normal {
+            show()
+        } else {
+            hide()
+        }
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = position
     }
-    
-    public func updateToolBar() {
-        
-        guard let ncplayer = self.ncplayer else { return }
-                
-        // MUTE
-        if let muteButton = muteButton {
-            if CCUtility.getAudioMute() {
-                muteButton.setImage(NCUtility.shared.loadImage(named: "audioOff", color: .white), for: .normal)
-            } else {
-                muteButton.setImage(NCUtility.shared.loadImage(named: "audioOn", color: .white), for: .normal)
-            }
-            muteButton.isEnabled = true
+
+    public func update() {
+        guard let ncplayer = self.ncplayer, let length = ncplayer.player.media?.length.intValue else { return }
+        let position = ncplayer.player.position
+        let positionInSecond = position * Float(length / 1000)
+
+        // SLIDER & TIME
+        if playbackSliderEvent == .ended {
+            playbackSlider.value = position
         }
-        
-        // PIP
-        if let pipButton = pipButton {
-            if metadata?.classFile == NCCommunicationCommon.typeClassFile.video.rawValue && AVPictureInPictureController.isPictureInPictureSupported() {
-                pipButton.setImage(NCUtility.shared.loadImage(named: "pip.enter", color: .white), for: .normal)
-                pipButton.isEnabled = true
-            } else {
-                pipButton.setImage(NCUtility.shared.loadImage(named: "pip.enter", color: .gray), for: .normal)
-                pipButton.isEnabled = false
-            }
-        }
-        
-        // SLIDER TIME (START - END)
-        let time = (ncplayer.player?.currentTime() ?? .zero).convertScale(1000, method: .default)
-        playbackSlider.value = Float(time.seconds)
-        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] = time.seconds
-        playbackSlider.isEnabled = true
-        labelCurrentTime.text = NCUtility.shared.stringFromTime(time)
-        labelLeftTime.text = "-" + NCUtility.shared.stringFromTime(ncplayer.durationTime - time)
-        
-        // BACK
-        if #available(iOS 13.0, *) {
-            backButton.setImage(NCUtility.shared.loadImage(named: "gobackward.10", color: .white), for: .normal)
-        } else {
-            backButton.setImage(NCUtility.shared.loadImage(named: "gobackward.10", color: .white, size: 30), for: .normal)
-        }
-        backButton.isEnabled = true
-                 
-        // PLAY
-        if ncplayer.isPlay() {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 1
-        } else {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 0
-        }
-        let namedPlay = ncplayer.isPlay() ? "pause.fill" : "play.fill"
-        if #available(iOS 13.0, *) {
-            playButton.setImage(NCUtility.shared.loadImage(named: namedPlay, color: .white, symbolConfiguration: UIImage.SymbolConfiguration(pointSize: 30)), for: .normal)
-        } else {
-            playButton.setImage(NCUtility.shared.loadImage(named: namedPlay, color: .white, size: 30), for: .normal)
-        }
-        playButton.isEnabled = true
-        
-        // FORWARD
-        if #available(iOS 13.0, *) {
-            forwardButton.setImage(NCUtility.shared.loadImage(named: "goforward.10", color: .white), for: .normal)
-        } else {
-            forwardButton.setImage(NCUtility.shared.loadImage(named: "goforward.10", color: .white, size: 30), for: .normal)
-        }
-        forwardButton.isEnabled = true
+        labelCurrentTime.text = ncplayer.player.time.stringValue
+        labelLeftTime.text = ncplayer.player.remainingTime?.stringValue
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyPlaybackDuration] = length / 1000
+        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] = positionInSecond
     }
-    
-    // MARK: Handle Notifications
-    
-    @objc func handleRouteChange(notification: Notification) {
-        guard let userInfo = notification.userInfo, let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt, let reason = AVAudioSession.RouteChangeReason(rawValue:reasonValue) else { return }
-        
-        switch reason {
-        case .newDeviceAvailable:
-            let session = AVAudioSession.sharedInstance()
-            for output in session.currentRoute.outputs where output.portType == AVAudioSession.Port.headphones {
-                print("headphones connected")
-                DispatchQueue.main.sync {
-                    ncplayer?.playerPlay()
-                    startTimerAutoHide()
-                }
-                break
-            }
-        case .oldDeviceUnavailable:
-            if let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription {
-                for output in previousRoute.outputs where output.portType == AVAudioSession.Port.headphones {
-                    print("headphones disconnected")
-                    DispatchQueue.main.sync {
-                        ncplayer?.playerPause()
-                        ncplayer?.saveCurrentTime()
-                    }
-                    break
-                }
-            }
-        default: ()
+
+    public func updateTopToolBar(videoSubTitlesIndexes: [Any], audioTrackIndexes: [Any]) {
+        if let metadata = metadata, metadata.isVideo {
+            self.subtitleButton.isEnabled = true
+            self.audioButton.isEnabled = true
         }
     }
-    
-    @objc func handleInterruption(notification: Notification) {
-        
-        guard let userInfo = notification.userInfo, let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-      
-        if type == .began {
-            print("Interruption began")
-        } else if type == .ended {
-            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                if options.contains(.shouldResume) {
-                    print("Interruption Ended - playback should resume")
-                    ncplayer?.playerPlay()
-                    startTimerAutoHide()
-                } else {
-                    print("Interruption Ended - playback should NOT resume")
-                }
-            }
-        }
-    }
-    
+
     // MARK: -
 
-    public func show(enableTimerAutoHide: Bool = false) {
-                
-        if metadata?.classFile != NCCommunicationCommon.typeClassFile.video.rawValue && metadata?.classFile != NCCommunicationCommon.typeClassFile.audio.rawValue { return }
-        if let metadata = self.metadata, metadata.livePhoto { return }
-        
-        timerAutoHide?.invalidate()
-        if enableTimerAutoHide {
-            startTimerAutoHide()
-        }
-        
-        if !self.isHidden { return }
-            
-        UIView.animate(withDuration: 0.3, animations: {
+    public func show() {
+        UIView.animate(withDuration: 0.5, animations: {
             self.alpha = 1
-            self.playerTopToolBarView.alpha = 1
-        }, completion: { (value: Bool) in
+        }, completion: { (_: Bool) in
             self.isHidden = false
-            self.playerTopToolBarView.isHidden = false
-        })
-        
-        updateToolBar()
-    }
-    
-    func isShow() -> Bool {
-        
-        return !self.isHidden
-    }
-    
-    public func hide() {
-              
-        UIView.animate(withDuration: 0.3, animations: {
-            self.alpha = 0
-            self.playerTopToolBarView.alpha = 0
-        }, completion: { (value: Bool) in
-            self.isHidden = true
-            self.playerTopToolBarView.isHidden = true
         })
     }
-    
-    @objc private func automaticHide() {
-        
-        if let metadata = self.metadata {
-            NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterHidePlayerToolBar, userInfo: ["ocId":metadata.ocId])
-        }
-    }
-    
-    private func startTimerAutoHide() {
-        
-        timerAutoHide?.invalidate()
-        timerAutoHide = Timer.scheduledTimer(timeInterval: 3.5, target: self, selector: #selector(automaticHide), userInfo: nil, repeats: false)
-    }
-    
-    private func reStartTimerAutoHide() {
-        
-        if let timerAutoHide = timerAutoHide, timerAutoHide.isValid {
-            startTimerAutoHide()
-        }
-    }
-    
-    func skip(seconds: Float64) {
-        
-        guard let ncplayer = ncplayer else { return }
-        guard let player = ncplayer.player else { return }
-        
-        let currentTime = player.currentTime()
-        var newTime: CMTime = .zero
-        let timeToAdd: CMTime = CMTimeMakeWithSeconds(abs(seconds), preferredTimescale: 1)
 
-        if seconds > 0 {
-            newTime = CMTimeAdd(currentTime, timeToAdd)
-            if newTime < ncplayer.durationTime {
-                ncplayer.videoSeek(time: newTime)
-            } else if newTime >= ncplayer.durationTime {
-                let timeToSubtract: CMTime = CMTimeMakeWithSeconds(3, preferredTimescale: 1)
-                newTime = CMTimeSubtract(ncplayer.durationTime, timeToSubtract)
-                if newTime > currentTime {
-                    ncplayer.videoSeek(time: newTime)
-                }
-            }
-        } else {
-            newTime = CMTimeSubtract(currentTime, timeToAdd)
-            if newTime.seconds < 0 {
-                newTime = .zero
-            }
-            ncplayer.videoSeek(time: newTime)
-        }
-        
-        updateToolBar()
-        reStartTimerAutoHide()
+    func hide() {
+        UIView.animate(withDuration: 0.5, animations: {
+            self.alpha = 0
+        }, completion: { (_: Bool) in
+            self.isHidden = true
+        })
     }
-    
-    func isPictureInPictureActive() -> Bool {
-                
-        if let pictureInPictureController = self.pictureInPictureController, pictureInPictureController.isPictureInPictureActive {
-            return true
-        } else {
-            return false
-        }
+
+    func playButtonPause() {
+        buttonImage = UIImage(systemName: "pause.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize))!.withTintColor(.white, renderingMode: .alwaysOriginal)
+        playButton.setImage(buttonImage, for: .normal)
+        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 1
     }
-    
-    func stopTimerAutoHide() {
-        
-        timerAutoHide?.invalidate()
+
+    func playButtonPlay() {
+        buttonImage = UIImage(systemName: "play.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize))!.withTintColor(.white, renderingMode: .alwaysOriginal)
+        playButton.setImage(buttonImage, for: .normal)
+        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 0
     }
-    
-    //MARK: - Event / Gesture
-    
-    @objc func onSliderValChanged(slider: UISlider, event: UIEvent) {
-        
-        if let touchEvent = event.allTouches?.first, let ncplayer = ncplayer {
-            
-            let seconds: Int64 = Int64(self.playbackSlider.value)
-            let targetTime: CMTime = CMTimeMake(value: seconds, timescale: 1)
-            
+
+    // MARK: - Event / Gesture
+
+    @objc func playbackValChanged(slider: UISlider, event: UIEvent) {
+        guard let ncplayer = ncplayer else { return }
+        let newPosition = playbackSlider.value
+
+        if let touchEvent = event.allTouches?.first {
             switch touchEvent.phase {
             case .began:
-                wasInPlay = ncplayer.isPlay()
-                ncplayer.playerPause()
+                viewerMediaPage?.timerAutoHide?.invalidate()
                 playbackSliderEvent = .began
             case .moved:
-                ncplayer.videoSeek(time: targetTime)
+                ncplayer.playerPosition(newPosition)
                 playbackSliderEvent = .moved
             case .ended:
-                ncplayer.videoSeek(time: targetTime)
-                if wasInPlay {
-                    ncplayer.playerPlay()
+                ncplayer.playerPosition(newPosition)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    self.playbackSliderEvent = .ended
+                    self.viewerMediaPage?.startTimerAutoHide()
                 }
-                playbackSliderEvent = .ended
             default:
                 break
             }
-            
-            reStartTimerAutoHide()
+        } else {
+            ncplayer.playerPosition(newPosition)
+            self.viewerMediaPage?.startTimerAutoHide()
         }
     }
-    
-    //MARK: - Action
-    
-    @objc func didSingleTapWith(gestureRecognizer: UITapGestureRecognizer) {
-        // nothing
+
+    // MARK: - Action
+
+    @objc func tap(gestureRecognizer: UITapGestureRecognizer) { }
+
+    @IBAction func tapFullscreen(_ sender: Any) {
+        isFullscreen = !isFullscreen
+        if isFullscreen {
+            fullscreenButton.setImage(utility.loadImage(named: "arrow.down.right.and.arrow.up.left", colors: [.white]), for: .normal)
+        } else {
+            fullscreenButton.setImage(utility.loadImage(named: "arrow.up.left.and.arrow.down.right", colors: [.white]), for: .normal)
+        }
+        viewerMediaPage?.changeScreenMode(mode: viewerMediaScreenMode)
     }
-    
-    @IBAction func buttonPlayerToolBarTouchInside(_ sender: UIButton) {
-        // nothing
+
+    @IBAction func tapSubTitle(_ sender: Any) {
+        guard let player = ncplayer?.player else { return }
+        let spuTracks = player.videoSubTitlesNames
+        let spuTrackIndexes = player.videoSubTitlesIndexes
+
+        toggleMenuSubTitle(spuTracks: spuTracks, spuTrackIndexes: spuTrackIndexes)
     }
-    
-    @IBAction func buttonPlayerTopToolBarTouchInside(_ sender: UIButton) {
-        // nothing
+
+    @IBAction func tapAudio(_ sender: Any) {
+        guard let player = ncplayer?.player else { return }
+        let audioTracks = player.audioTrackNames
+        let audioTrackIndexes = player.audioTrackIndexes
+
+        toggleMenuAudio(audioTracks: audioTracks, audioTrackIndexes: audioTrackIndexes)
     }
-    
-    @IBAction func playerPause(_ sender: Any) {
-        
-        if ncplayer?.player?.timeControlStatus == .playing {
-            ncplayer?.playerPause()
-            ncplayer?.saveCurrentTime()
-            timerAutoHide?.invalidate()
-        } else if ncplayer?.player?.timeControlStatus == .paused {
-            ncplayer?.playerPlay()
-            startTimerAutoHide()
-        } else if ncplayer?.player?.timeControlStatus == .waitingToPlayAtSpecifiedRate {
-            print("timeControlStatus.waitingToPlayAtSpecifiedRate")
-            if let reason = ncplayer?.player?.reasonForWaitingToPlay {
-                switch reason {
-                case .evaluatingBufferingRate:
-                    print("reasonForWaitingToPlay.evaluatingBufferingRate")
-                case .toMinimizeStalls:
-                    print("reasonForWaitingToPlay.toMinimizeStalls")
-                case .noItemToPlay:
-                    print("reasonForWaitingToPlay.noItemToPlay")
-                default:
-                    print("Unknown \(reason)")
+
+    @IBAction func tapPlayerPause(_ sender: Any) {
+        guard let ncplayer = ncplayer else { return }
+
+        if ncplayer.isPlaying() {
+            ncplayer.playerPause()
+        } else {
+            ncplayer.playerPlay()
+        }
+
+        self.viewerMediaPage?.startTimerAutoHide()
+    }
+
+    @IBAction func tapForward(_ sender: Any) {
+        guard let ncplayer = ncplayer else { return }
+
+        ncplayer.jumpForward(10)
+        self.viewerMediaPage?.startTimerAutoHide()
+    }
+
+    @IBAction func tapBack(_ sender: Any) {
+        guard let ncplayer = ncplayer else { return }
+
+        ncplayer.jumpBackward(10)
+        self.viewerMediaPage?.startTimerAutoHide()
+    }
+
+    @IBAction func tapRepeat(_ sender: Any) {
+        if playRepeat {
+            playRepeat = false
+            repeatButton.setImage(utility.loadImage(named: "repeat", colors: [NCBrandColor.shared.iconImageColor2]), for: .normal)
+        } else {
+            playRepeat = true
+            repeatButton.setImage(utility.loadImage(named: "repeat", colors: [.white]), for: .normal)
+        }
+    }
+}
+
+extension NCPlayerToolBar {
+    func toggleMenuSubTitle(spuTracks: [Any], spuTrackIndexes: [Any]) {
+        var actions = [NCMenuAction]()
+        var subTitleIndex: Int?
+
+        if let data = self.database.getVideo(metadata: metadata), let idx = data.currentVideoSubTitleIndex {
+            subTitleIndex = idx
+        } else if let idx = ncplayer?.player.currentVideoSubTitleIndex {
+            subTitleIndex = Int(idx)
+        }
+
+        if !spuTracks.isEmpty {
+            for index in 0...spuTracks.count - 1 {
+
+                guard let title = spuTracks[index] as? String, let idx = spuTrackIndexes[index] as? Int32, let metadata = self.metadata else { return }
+
+                actions.append(
+                    NCMenuAction(
+                        title: title,
+                        icon: UIImage(),
+                        onTitle: title,
+                        onIcon: UIImage(),
+                        selected: (subTitleIndex ?? -9999) == idx,
+                        on: (subTitleIndex ?? -9999) == idx,
+                        action: { _ in
+                            self.ncplayer?.player.currentVideoSubTitleIndex = idx
+                            self.database.addVideo(metadata: metadata, currentVideoSubTitleIndex: Int(idx))
+                        }
+                    )
+                )
+            }
+
+            actions.append(.seperator(order: 0))
+        }
+
+        actions.append(
+            NCMenuAction(
+                title: NSLocalizedString("_add_subtitle_", comment: ""),
+                icon: UIImage(),
+                onTitle: NSLocalizedString("_add_subtitle_", comment: ""),
+                onIcon: UIImage(),
+                selected: false,
+                on: false,
+                action: { _ in
+
+                    guard let metadata = self.metadata else { return }
+                    let storyboard = UIStoryboard(name: "NCSelect", bundle: nil)
+                    if let navigationController = storyboard.instantiateInitialViewController() as? UINavigationController,
+                       let viewController = navigationController.topViewController as? NCSelect {
+
+                        viewController.delegate = self
+                        viewController.typeOfCommandView = .nothing
+                        viewController.includeDirectoryE2EEncryption = false
+                        viewController.enableSelectFile = true
+                        viewController.type = "subtitle"
+                        viewController.serverUrl = metadata.serverUrl
+                        viewController.session = NCSession.shared.getSession(account: metadata.account)
+
+                        self.viewerMediaPage?.present(navigationController, animated: true, completion: nil)
+                    }
+                }
+            )
+        )
+
+        viewerMediaPage?.presentMenu(with: actions, menuColor: UIColor(hexString: "#1C1C1EFF"), textColor: .white)
+    }
+
+    func toggleMenuAudio(audioTracks: [Any], audioTrackIndexes: [Any]) {
+        var actions = [NCMenuAction]()
+        var audioIndex: Int?
+
+        if let data = self.database.getVideo(metadata: metadata), let idx = data.currentAudioTrackIndex {
+            audioIndex = idx
+        } else if let idx = ncplayer?.player.currentAudioTrackIndex {
+            audioIndex = Int(idx)
+        }
+
+        if !audioTracks.isEmpty {
+            for index in 0...audioTracks.count - 1 {
+                guard let title = audioTracks[index] as? String, let idx = audioTrackIndexes[index] as? Int32, let metadata = self.metadata else { return }
+                actions.append(
+                    NCMenuAction(
+                        title: title,
+                        icon: UIImage(),
+                        onTitle: title,
+                        onIcon: UIImage(),
+                        selected: (audioIndex ?? -9999) == idx,
+                        on: (audioIndex ?? -9999) == idx,
+                        action: { _ in
+                            self.ncplayer?.player.currentAudioTrackIndex = idx
+                            self.database.addVideo(metadata: metadata, currentAudioTrackIndex: Int(idx))
+                        }
+                    )
+                )
+            }
+
+            actions.append(.seperator(order: 0))
+        }
+
+        actions.append(
+            NCMenuAction(
+                title: NSLocalizedString("_add_audio_", comment: ""),
+                icon: UIImage(),
+                onTitle: NSLocalizedString("_add_audio_", comment: ""),
+                onIcon: UIImage(),
+                selected: false,
+                on: false,
+                action: { _ in
+                    guard let metadata = self.metadata else { return }
+                    let storyboard = UIStoryboard(name: "NCSelect", bundle: nil)
+                    if let navigationController = storyboard.instantiateInitialViewController() as? UINavigationController,
+                        let viewController = navigationController.topViewController as? NCSelect {
+
+                        viewController.delegate = self
+                        viewController.typeOfCommandView = .nothing
+                        viewController.includeDirectoryE2EEncryption = false
+                        viewController.enableSelectFile = true
+                        viewController.type = "audio"
+                        viewController.serverUrl = metadata.serverUrl
+                        viewController.session = NCSession.shared.getSession(account: metadata.account)
+
+                        self.viewerMediaPage?.present(navigationController, animated: true, completion: nil)
+                    }
+                }
+            )
+        )
+
+        viewerMediaPage?.presentMenu(with: actions, menuColor: UIColor(hexString: "#1C1C1EFF"), textColor: .white)
+    }
+}
+
+extension NCPlayerToolBar: NCSelectDelegate {
+    func dismissSelect(serverUrl: String?, metadata: tableMetadata?, type: String, items: [Any], overwrite: Bool, copy: Bool, move: Bool, session: NCSession.Session) {
+        if let metadata = metadata, let viewerMediaPage = viewerMediaPage {
+            let serverUrlFileName = metadata.serverUrl + "/" + metadata.fileName
+            let fileNameLocalPath = NCUtilityFileSystem().getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView)
+
+            if utilityFileSystem.fileProviderStorageExists(metadata) {
+                addPlaybackSlave(type: type, metadata: metadata)
+            } else {
+                var downloadRequest: DownloadRequest?
+                hud.initHudRing(view: viewerMediaPage.view,
+                                text: NSLocalizedString("_downloading_", comment: ""),
+                                tapToCancelDetailText: true) {
+                    if let request = downloadRequest {
+                        request.cancel()
+                    }
+                }
+
+                NextcloudKit.shared.download(serverUrlFileName: serverUrlFileName, fileNameLocalPath: fileNameLocalPath, account: metadata.account, requestHandler: { request in
+                    downloadRequest = request
+                }, taskHandler: { _ in
+                }, progressHandler: { progress in
+                    self.hud.progress(progress.fractionCompleted)
+                }) { _, _, _, _, _, _, error in
+                    self.hud.dismiss()
+                    if error == .success {
+                        self.hud.success()
+                        self.addPlaybackSlave(type: type, metadata: metadata)
+                    } else if error.errorCode != 200 {
+                        self.hud.error(text: error.errorDescription)
+                    }
                 }
             }
         }
     }
-        
-    @IBAction func setMute(_ sender: Any) {
-        
-        let mute = CCUtility.getAudioMute()
-        
-        CCUtility.setAudioMute(!mute)
-        ncplayer?.player?.isMuted = !mute
-        updateToolBar()
-        reStartTimerAutoHide()
-    }
-    
-    @IBAction func setPip(_ sender: Any) {
-        
-        guard let videoLayer = ncplayer?.videoLayer else { return }
-        
-        if let pictureInPictureController = self.pictureInPictureController, pictureInPictureController.isPictureInPictureActive {
-            pictureInPictureController.stopPictureInPicture()
-        }
-        
-        if pictureInPictureController == nil {
-            pictureInPictureController = AVPictureInPictureController(playerLayer: videoLayer)
-            pictureInPictureController?.delegate = self
-        }
-        
-        if let pictureInPictureController = pictureInPictureController, pictureInPictureController.isPictureInPicturePossible, let metadata = self.metadata {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                pictureInPictureController.startPictureInPicture()
-                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterHidePlayerToolBar, userInfo: ["ocId":metadata.ocId])
-            }
-        }
-    }
-    
-    @IBAction func forwardButtonSec(_ sender: Any) {
-        
-        skip(seconds: 10)
-        
-        /*
-        if metadata?.classFile == NCCommunicationCommon.typeClassFile.video.rawValue {
-            skip(seconds: 10)
-        } else if metadata?.classFile == NCCommunicationCommon.typeClassFile.audio.rawValue {
-            forward()
-        }
-        */
-    }
-    
-    @IBAction func backButtonSec(_ sender: Any) {
-        
-        skip(seconds: -10)
-        
-        /*
-        if metadata?.classFile == NCCommunicationCommon.typeClassFile.video.rawValue {
-            skip(seconds: -10)
-        } else if metadata?.classFile == NCCommunicationCommon.typeClassFile.audio.rawValue {
-            backward()
-        }
-        */
-    }
-    
-    func forward() {
-        
-        var index: Int = 0
-        
-        if let currentIndex = self.viewerMediaPage?.currentIndex, let metadatas = self.viewerMediaPage?.metadatas, let ncplayer = self.ncplayer {
-        
-            if currentIndex == metadatas.count - 1 {
-                index = 0
-            } else {
-                index = currentIndex + 1
-            }
-            
-            self.viewerMediaPage?.goTo(index: index, direction: .forward, autoPlay: ncplayer.isPlay())
-        }
-    }
-    
-    func backward() {
-        
-        var index: Int = 0
 
-        if let currentIndex = self.viewerMediaPage?.currentIndex, let metadatas = self.viewerMediaPage?.metadatas, let ncplayer = self.ncplayer {
-            
-            if currentIndex == 0 {
-                index = metadatas.count - 1
-            } else {
-                index = currentIndex - 1
-            }
-            
-            self.viewerMediaPage?.goTo(index: index, direction: .reverse, autoPlay: ncplayer.isPlay())
+    // swiftlint:disable inclusive_language
+    func addPlaybackSlave(type: String, metadata: tableMetadata) {
+    // swiftlint:enable inclusive_language
+        let fileNameLocalPath = utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView)
+
+        if type == "subtitle" {
+            self.ncplayer?.player.addPlaybackSlave(URL(fileURLWithPath: fileNameLocalPath), type: .subtitle, enforce: true)
+        } else if type == "audio" {
+            self.ncplayer?.player.addPlaybackSlave(URL(fileURLWithPath: fileNameLocalPath), type: .audio, enforce: true)
         }
     }
 }
 
-extension NCPlayerToolBar: AVPictureInPictureControllerDelegate {
-    
-    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+// https://stackoverflow.com/questions/13196263/custom-uislider-increase-hot-spot-size
+//
+class NCPlayerToolBarSlider: UISlider {
+    private var thumbTouchSize = CGSize(width: 100, height: 100)
 
-        if let metadata = self.metadata, let ncplayer = self.ncplayer, !ncplayer.isPlay() {
-            NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterShowPlayerToolBar, userInfo: ["ocId":metadata.ocId, "enableTimerAutoHide": false])
-        }
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let increasedBounds = bounds.insetBy(dx: -thumbTouchSize.width, dy: -thumbTouchSize.height)
+        let containsPoint = increasedBounds.contains(point)
+        return containsPoint
+    }
+
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        let percentage = CGFloat((value - minimumValue) / (maximumValue - minimumValue))
+        let thumbSizeHeight = thumbRect(forBounds: bounds, trackRect: trackRect(forBounds: bounds), value: 0).size.height
+        let thumbPosition = thumbSizeHeight + (percentage * (bounds.size.width - (2 * thumbSizeHeight)))
+        let touchLocation = touch.location(in: self)
+        return touchLocation.x <= (thumbPosition + thumbTouchSize.width) && touchLocation.x >= (thumbPosition - thumbTouchSize.width)
+    }
+
+    public func addTapGesture() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+
+        addGestureRecognizer(tap)
+    }
+
+    @objc private func handleTap(_ sender: UITapGestureRecognizer) {
+        let location = sender.location(in: self)
+        let percent = minimumValue + Float(location.x / bounds.width) * (maximumValue - minimumValue)
+
+        setValue(percent, animated: true)
+        sendActions(for: .valueChanged)
     }
 }
-
